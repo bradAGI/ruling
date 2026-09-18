@@ -1,0 +1,233 @@
+{
+  "styles": [
+    "short and to the point",
+    "long and rambling, with irrelevant detail",
+    "formal and polite",
+    "casual, with lowercase and a typo or two",
+    "written by someone whose first language is not English",
+    "written on a phone in a hurry",
+    "structured with a few line breaks"
+  ],
+  "worlds": [
+    {
+      "id": "support_message",
+      "writer": "a message a customer sends to an online store's support inbox",
+      "attributes": [
+        {"id": "goal", "question": {"type": "choice", "instructions": "What does the customer mainly want?", "criteria": {
+            "refund": "Money back for a charge or order", "replacement": "A replacement, repair, or fix", "status": "An update on where an order or case stands",
+            "cancel": "To cancel an order or subscription", "information": "An answer to a question before or after buying"}},
+         "values": {"refund": {"hint": "the customer's main goal is to get their money back", "weight": 3},
+                    "replacement": {"hint": "the customer's main goal is a replacement or a fix for a broken item", "weight": 2},
+                    "status": {"hint": "the customer's main goal is to find out where their order or case stands", "weight": 2},
+                    "cancel": {"hint": "the customer's main goal is to cancel an order or a subscription", "weight": 2},
+                    "information": {"hint": "the customer is only asking a product or policy question", "weight": 2}}},
+        {"id": "frustration", "question": {"type": "score", "instructions": "How frustrated is the customer?", "criteria": ["calm", "annoyed", "angry"]},
+         "values": {"0": {"hint": "the customer is calm and polite", "weight": 3}, "1": {"hint": "the customer is noticeably annoyed", "weight": 2},
+                    "2": {"hint": "the customer is angry and uses strong language", "weight": 2}}},
+        {"id": "deadline", "question": {"type": "noul", "instructions": "The customer states a specific date or time by which they need a response."},
+         "values": {"true": {"hint": "the customer names a specific date or time they need this resolved by", "weight": 2},
+                    "false": {"hint": "the customer mentions no date, time, or deadline", "weight": 3}}},
+        {"id": "wants_human", "question": {"type": "noul", "instructions": "The customer asks to talk to a person."},
+         "values": {"true": {"hint": "the customer explicitly asks to speak with a human or a manager", "weight": 1},
+                    "false": {"hint": "the customer does not ask for a human or a manager", "weight": 3}}},
+        {"id": "order_number", "question": {"type": "noul", "instructions": "The message includes an order number."},
+         "values": {"true": {"hint": "the message includes an order number", "weight": 2},
+                    "false": {"hint": "the message contains no order number or reference code", "weight": 2}}}
+      ]
+    },
+    {
+      "id": "helpdesk_ticket",
+      "writer": "an internal IT helpdesk ticket written by an employee",
+      "attributes": [
+        {"id": "category", "question": {"type": "choice", "instructions": "Which IT queue should handle this ticket?", "criteria": {
+            "access": "Accounts, passwords, logins, and permissions", "hardware": "Laptops, monitors, phones, and peripherals", "network": "Wi-Fi, VPN, and connectivity",
+            "software": "Installing, updating, or fixing an application", "security": "Suspicious emails, lost devices, or possible compromise"}},
+         "values": {"access": {"hint": "the problem is about an account, password, login, or permission", "weight": 2},
+                    "hardware": {"hint": "the problem is with a physical device such as a laptop, monitor, or dock", "weight": 2},
+                    "network": {"hint": "the problem is Wi-Fi, VPN, or internet connectivity", "weight": 2},
+                    "software": {"hint": "the problem is installing, updating, or a bug in an application", "weight": 2},
+                    "security": {"hint": "the employee reports a suspicious email, a lost device, or a possible compromise", "weight": 1}}},
+        {"id": "impact", "question": {"type": "score", "instructions": "How badly is the employee's work affected?", "criteria": ["not blocked", "slowed down", "completely blocked"]},
+         "values": {"0": {"hint": "the employee can still work normally; this is a minor annoyance", "weight": 2},
+                    "1": {"hint": "the employee can work but is slowed down", "weight": 2},
+                    "2": {"hint": "the employee cannot do their job at all until this is fixed", "weight": 2}}},
+        {"id": "multiple_people", "question": {"type": "noul", "instructions": "The problem affects more than one person."},
+         "values": {"true": {"hint": "several coworkers or a whole team have the same problem", "weight": 1},
+                    "false": {"hint": "only the writer is affected and no one else is mentioned as affected", "weight": 3}}},
+        {"id": "tried_fix", "question": {"type": "noul", "instructions": "The employee says what they already tried."},
+         "values": {"true": {"hint": "the employee describes something they already tried to fix it", "weight": 2},
+                    "false": {"hint": "the employee does not mention trying anything", "weight": 2}}}
+      ]
+    },
+    {
+      "id": "product_review",
+      "writer": "a product review posted on a shopping site, without a star rating",
+      "attributes": [
+        {"id": "rating", "question": {"type": "score", "instructions": "What star rating does this review most likely go with?", "criteria": ["1 star", "2 stars", "3 stars", "4 stars", "5 stars"]},
+         "values": {"0": {"hint": "the reviewer hated the product", "weight": 2}, "1": {"hint": "the reviewer is mostly disappointed", "weight": 1},
+                    "2": {"hint": "the reviewer is mixed, with real pros and cons", "weight": 1}, "3": {"hint": "the reviewer mostly likes it with a minor complaint", "weight": 1},
+                    "4": {"hint": "the reviewer loves the product", "weight": 2}}},
+        {"id": "aspect", "question": {"type": "choice", "instructions": "Which aspect does the review focus on most?", "criteria": {
+            "quality": "Build quality and durability", "price": "Price and value for money", "shipping": "Delivery and packaging",
+            "usability": "How easy it is to use", "support": "The seller's customer service"}},
+         "values": {"quality": {"hint": "the review focuses mostly on build quality or how long it lasted", "weight": 2},
+                    "price": {"hint": "the review focuses mostly on price and value for money", "weight": 1},
+                    "shipping": {"hint": "the review focuses mostly on delivery or packaging", "weight": 1},
+                    "usability": {"hint": "the review focuses mostly on how easy or hard it is to use", "weight": 2},
+                    "support": {"hint": "the review focuses mostly on the seller's customer service", "weight": 1}}},
+        {"id": "would_recommend", "question": {"type": "noul", "instructions": "The reviewer would recommend the product to others."},
+         "values": {"true": {"hint": "the reviewer would recommend it, directly or clearly implied", "weight": 1},
+                    "false": {"hint": "the reviewer would not recommend it, directly or clearly implied", "weight": 1}}},
+        {"id": "returned", "question": {"type": "noul", "instructions": "The reviewer returned or plans to return the product."},
+         "values": {"true": {"hint": "the reviewer returned the product or says they will", "weight": 1},
+                    "false": {"hint": "the reviewer kept the product and does not mention returning it", "weight": 3}}}
+      ]
+    },
+    {
+      "id": "sales_inquiry",
+      "writer": "an inbound email to a B2B software company's sales address",
+      "attributes": [
+        {"id": "stage", "question": {"type": "choice", "instructions": "Where is this sender in the buying process?", "criteria": {
+            "exploring": "Just learning what the product does", "evaluating": "Comparing options or asking for a demo or trial", "ready": "Ready to buy and asking about contracts or pricing",
+            "existing": "Already a customer asking about their account", "not_a_lead": "Not a buyer, such as a vendor pitch or a job seeker"}},
+         "values": {"exploring": {"hint": "the sender is only starting to learn what the product does", "weight": 2},
+                    "evaluating": {"hint": "the sender is comparing vendors or asking for a demo or trial", "weight": 2},
+                    "ready": {"hint": "the sender wants to buy now and asks about pricing, contracts, or invoices", "weight": 1},
+                    "existing": {"hint": "the sender is already a customer and writes about their existing account", "weight": 1},
+                    "not_a_lead": {"hint": "the sender is not a potential buyer; they are pitching their own service or looking for a job", "weight": 1}}},
+        {"id": "company_size", "question": {"type": "score", "instructions": "How large is the sender's organization?", "criteria": ["unknown or tiny", "small team", "mid-size company", "large enterprise"]},
+         "values": {"0": {"hint": "the size of the sender's organization cannot be told, or it is one person", "weight": 2},
+                    "1": {"hint": "the sender works at a small team of under 50 people", "weight": 2},
+                    "2": {"hint": "the sender works at a company of a few hundred people", "weight": 1},
+                    "3": {"hint": "the sender works at a large enterprise with thousands of employees", "weight": 1}}},
+        {"id": "budget_mentioned", "question": {"type": "noul", "instructions": "The sender mentions a budget or a price range."},
+         "values": {"true": {"hint": "the sender mentions a budget or a price range", "weight": 1},
+                    "false": {"hint": "the sender says nothing about budget or price range", "weight": 2}}},
+        {"id": "competitor", "question": {"type": "noul", "instructions": "The sender mentions a competing product."},
+         "values": {"true": {"hint": "the sender names a competing product they use or are considering", "weight": 1},
+                    "false": {"hint": "the sender does not mention any other product", "weight": 2}}}
+      ]
+    },
+    {
+      "id": "forum_post",
+      "writer": "a post in an online community forum for home cooks",
+      "attributes": [
+        {"id": "moderation", "question": {"type": "choice", "instructions": "What should a moderator do with this post?", "criteria": {
+            "approve": "Leave it up", "off_topic": "Move it because it is not about cooking", "spam": "Remove it as advertising or spam", "abusive": "Remove it for attacking or harassing someone"}},
+         "values": {"approve": {"hint": "the post is a normal, friendly cooking question or tip", "weight": 4},
+                    "off_topic": {"hint": "the post is friendly but about something unrelated to cooking", "weight": 1},
+                    "spam": {"hint": "the post is really an advertisement with a link or a discount code", "weight": 1},
+                    "abusive": {"hint": "the post personally attacks another member", "weight": 1}}},
+        {"id": "question", "question": {"type": "noul", "instructions": "The post asks the community a question."},
+         "values": {"true": {"hint": "the post asks the community a question", "weight": 2},
+                    "false": {"hint": "the post asks no question at all", "weight": 1}}},
+        {"id": "safety", "question": {"type": "noul", "instructions": "The post describes something that could make people sick or hurt."},
+         "values": {"true": {"hint": "the post describes an unsafe practice, such as leaving chicken out overnight or a grease fire", "weight": 1},
+                    "false": {"hint": "nothing in the post is unsafe", "weight": 4}}}
+      ]
+    },
+    {
+      "id": "bug_report",
+      "writer": "a bug report filed on a mobile app's issue tracker by a user",
+      "attributes": [
+        {"id": "severity", "question": {"type": "score", "instructions": "How severe is this bug?", "criteria": ["cosmetic", "minor", "major", "critical"]},
+         "values": {"0": {"hint": "the bug is purely visual, like a misaligned button or a typo", "weight": 1},
+                    "1": {"hint": "a feature misbehaves but there is an easy workaround", "weight": 2},
+                    "2": {"hint": "an important feature does not work and there is no good workaround", "weight": 2},
+                    "3": {"hint": "the app crashes on launch, loses data, or charges money wrongly", "weight": 1}}},
+        {"id": "area", "question": {"type": "choice", "instructions": "Which part of the app is affected?", "criteria": {
+            "login": "Signing in and accounts", "payments": "Checkout and payments", "sync": "Syncing and saving data", "notifications": "Push notifications", "display": "Layout and appearance"}},
+         "values": {"login": {"hint": "the bug happens while signing in or managing the account", "weight": 1},
+                    "payments": {"hint": "the bug happens during checkout or payment", "weight": 1},
+                    "sync": {"hint": "the bug is about data not syncing or not saving", "weight": 1},
+                    "notifications": {"hint": "the bug is about push notifications", "weight": 1},
+                    "display": {"hint": "the bug is about layout, text, or appearance", "weight": 1}}},
+        {"id": "steps", "question": {"type": "noul", "instructions": "The report gives steps to reproduce the bug."},
+         "values": {"true": {"hint": "the report lists steps that reproduce the bug", "weight": 1},
+                    "false": {"hint": "the report gives no reproduction steps", "weight": 1}}},
+        {"id": "device", "question": {"type": "noul", "instructions": "The report says which device or OS version is used."},
+         "values": {"true": {"hint": "the report names the phone model or OS version", "weight": 1},
+                    "false": {"hint": "the report does not mention the device or OS version", "weight": 1}}}
+      ]
+    },
+    {
+      "id": "maintenance_request",
+      "writer": "a maintenance request a tenant submits through an apartment building's portal",
+      "attributes": [
+        {"id": "trade", "question": {"type": "choice", "instructions": "Who should be sent?", "criteria": {
+            "plumber": "Plumbing, leaks, and drains", "electrician": "Power, outlets, and lighting", "hvac": "Heating and air conditioning", "locksmith": "Locks and keys", "general": "General handyman work"}},
+         "values": {"plumber": {"hint": "the problem is a leak, a clog, or no water", "weight": 2},
+                    "electrician": {"hint": "the problem is power, outlets, or lights", "weight": 1},
+                    "hvac": {"hint": "the problem is heating or air conditioning", "weight": 2},
+                    "locksmith": {"hint": "the problem is a lock or a lost key", "weight": 1},
+                    "general": {"hint": "the problem is a broken cabinet, a door hinge, or similar small repair", "weight": 1}}},
+        {"id": "emergency", "question": {"type": "noul", "instructions": "This is an emergency that needs someone today."},
+         "values": {"true": {"hint": "there is active flooding, no heat in freezing weather, sparks, or the tenant is locked out", "weight": 1},
+                    "false": {"hint": "the problem is inconvenient but can safely wait a few days", "weight": 2}}},
+        {"id": "permission_to_enter", "question": {"type": "noul", "instructions": "The tenant gives permission to enter when they are not home."},
+         "values": {"true": {"hint": "the tenant says maintenance may enter while they are out", "weight": 1},
+                    "false": {"hint": "the tenant says nothing about entering while they are out, or asks to be present", "weight": 1}}}
+      ]
+    },
+    {
+      "id": "meeting_notes",
+      "writer": "informal notes someone typed during a short team meeting",
+      "attributes": [
+        {"id": "outcome", "question": {"type": "choice", "instructions": "What was the meeting's outcome?", "criteria": {
+            "decided": "A decision was made", "deferred": "The decision was postponed", "info_only": "It was only a status update", "escalated": "The issue was sent to leadership"}},
+         "values": {"decided": {"hint": "the team clearly made a decision", "weight": 2},
+                    "deferred": {"hint": "the team postponed the decision until more information arrives", "weight": 1},
+                    "info_only": {"hint": "it was only status updates and nothing needed deciding", "weight": 1},
+                    "escalated": {"hint": "the team agreed to hand the question to leadership", "weight": 1}}},
+        {"id": "owner", "question": {"type": "noul", "instructions": "A named person owns the next step."},
+         "values": {"true": {"hint": "a specific person is named as responsible for the next step", "weight": 2},
+                    "false": {"hint": "no one is named as responsible for any next step", "weight": 1}}},
+        {"id": "due_date", "question": {"type": "noul", "instructions": "The notes give a due date for follow-up."},
+         "values": {"true": {"hint": "the notes give a due date for follow-up", "weight": 1},
+                    "false": {"hint": "no due date appears anywhere in the notes", "weight": 1}}},
+        {"id": "tension", "question": {"type": "score", "instructions": "How much disagreement was there?", "criteria": ["none", "some", "a lot"]},
+         "values": {"0": {"hint": "everyone agreed", "weight": 2}, "1": {"hint": "there was some polite disagreement", "weight": 1},
+                    "2": {"hint": "there was sharp disagreement between people", "weight": 1}}}
+      ]
+    },
+    {
+      "id": "travel_change",
+      "writer": "a message to an airline's customer care about an upcoming trip",
+      "attributes": [
+        {"id": "request", "question": {"type": "choice", "instructions": "What change is the traveler asking for?", "criteria": {
+            "rebook": "Move to a different flight", "cancel": "Cancel the trip", "seat": "Change or add a seat", "baggage": "Baggage allowance or a lost bag", "assistance": "Special assistance at the airport"}},
+         "values": {"rebook": {"hint": "the traveler wants to move to a different flight", "weight": 2},
+                    "cancel": {"hint": "the traveler wants to cancel the trip", "weight": 1},
+                    "seat": {"hint": "the traveler wants to change or add a seat", "weight": 1},
+                    "baggage": {"hint": "the traveler asks about baggage or a lost bag", "weight": 1},
+                    "assistance": {"hint": "the traveler needs a wheelchair or other assistance at the airport", "weight": 1}}},
+        {"id": "within_24h", "question": {"type": "noul", "instructions": "The flight departs within the next 24 hours."},
+         "values": {"true": {"hint": "the flight leaves today or tomorrow morning", "weight": 1},
+                    "false": {"hint": "the flight is at least several days away", "weight": 2}}},
+        {"id": "reason_medical", "question": {"type": "noul", "instructions": "The traveler gives a medical reason."},
+         "values": {"true": {"hint": "the traveler gives a medical reason for the request", "weight": 1},
+                    "false": {"hint": "the traveler gives no medical reason", "weight": 3}}}
+      ]
+    },
+    {
+      "id": "job_applicant",
+      "writer": "an email a job applicant sends to a company's recruiting inbox",
+      "attributes": [
+        {"id": "purpose", "question": {"type": "choice", "instructions": "Why is the applicant writing?", "criteria": {
+            "apply": "To apply for a role", "follow_up": "To ask about an application they already sent", "reschedule": "To move an interview", "withdraw": "To withdraw from the process", "offer": "To respond to a job offer"}},
+         "values": {"apply": {"hint": "the applicant is applying for a role", "weight": 2},
+                    "follow_up": {"hint": "the applicant is checking on an application they already sent", "weight": 2},
+                    "reschedule": {"hint": "the applicant needs to move an interview", "weight": 1},
+                    "withdraw": {"hint": "the applicant is withdrawing from consideration", "weight": 1},
+                    "offer": {"hint": "the applicant is replying to a job offer", "weight": 1}}},
+        {"id": "seniority", "question": {"type": "score", "instructions": "How experienced does the applicant seem?", "criteria": ["student or new graduate", "a few years of experience", "senior professional"]},
+         "values": {"0": {"hint": "the applicant is a student or recent graduate", "weight": 1},
+                    "1": {"hint": "the applicant has a few years of work experience", "weight": 1},
+                    "2": {"hint": "the applicant is a senior professional with many years of experience", "weight": 1}}},
+        {"id": "sponsorship", "question": {"type": "noul", "instructions": "The applicant mentions needing visa sponsorship."},
+         "values": {"true": {"hint": "the applicant says they will need visa sponsorship", "weight": 1},
+                    "false": {"hint": "the applicant says nothing about visas or work authorization", "weight": 4}}}
+      ]
+    }
+  ]
+}

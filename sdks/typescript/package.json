@@ -1,0 +1,11 @@
+{
+  "name": "ruling",
+  "version": "0.2.0",
+  "description": "Client for a ruling server: typed, probabilistic decisions from a local model.",
+  "type": "module",
+  "main": "index.js",
+  "types": "index.d.ts",
+  "files": ["index.js", "index.d.ts"],
+  "license": "MIT",
+  "engines": { "node": ">=18" }
+}

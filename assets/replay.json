@@ -1,0 +1,7 @@
+{
+  "model": "mlx-community/Qwen3.5-4B-4bit",
+  "ruling_ms": 119,
+  "generated_tokens": 105,
+  "generation_ms": 755,
+  "generated_text": "{\n  \"team\": {\n    \"billing\": 0.95,\n    \"technical\": 0.03,\n    \"sales\": 0.01,\n    \"refund\": 0.02\n  },\n  \"urgency\": {\n    \"0\": 0.1,\n    \"1\": 0.6,\n    \"2\": 0.3\n  },\n  \"refund\": 0.98\n}"
+}

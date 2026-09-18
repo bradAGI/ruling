@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ruling playground</title>
+<style>
+  :root { --bg: #fafaf7; --fg: #1b1b1b; --muted: #6b6b6b; --line: #dcdcd5; --bar: #2f6f4f; --accent: #b3451f; }
+  @media (prefers-color-scheme: dark) { :root { --bg: #161615; --fg: #ecece6; --muted: #9a9a92; --line: #33332f; --bar: #5fae85; --accent: #e0774d; } }
+  body { margin: 0; background: var(--bg); color: var(--fg); font: 15px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace; }
+  main { max-width: 960px; margin: 0 auto; padding: 24px 16px; display: grid; gap: 16px; grid-template-columns: 1fr 1fr; }
+  h1 { grid-column: 1 / -1; margin: 0; font-size: 18px; }
+  h1 small { color: var(--muted); font-weight: normal; margin-left: 8px; }
+  label { display: block; color: var(--muted); font-size: 12px; margin-bottom: 4px; }
+  textarea { width: 100%; box-sizing: border-box; min-height: 260px; background: transparent; color: inherit; border: 1px solid var(--line); border-radius: 4px; padding: 8px; font: inherit; }
+  button { grid-column: 1 / -1; justify-self: start; padding: 8px 14px; border: 1px solid var(--fg); background: var(--fg); color: var(--bg); border-radius: 4px; font: inherit; cursor: pointer; }
+  #out { grid-column: 1 / -1; display: grid; gap: 12px; }
+  .q { border: 1px solid var(--line); border-radius: 4px; padding: 10px 12px; }
+  .q b { display: block; margin-bottom: 6px; }
+  .row { display: grid; grid-template-columns: 140px 1fr 60px; gap: 8px; align-items: center; font-size: 13px; }
+  .bar { height: 10px; background: var(--line); border-radius: 2px; overflow: hidden; }
+  .bar i { display: block; height: 100%; background: var(--bar); }
+  .meta { color: var(--muted); font-size: 12px; }
+  .err { color: var(--accent); }
+  @media (max-width: 700px) { main { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+<main>
+  <h1>ruling <small>typed decisions, no text generation</small></h1>
+  <div>
+    <label for="state">state (text or JSON)</label>
+    <textarea id="state">{"message": "My card was charged twice for one order. Refund the duplicate."}</textarea>
+  </div>
+  <div>
+    <label for="questions">questions (JSON)</label>
+    <textarea id="questions">{
+  "team": {"type": "choice", "instructions": "Which team should handle this?",
+           "criteria": {"billing": "Charges and refunds", "technical": "Bugs", "sales": "Pricing"}},
+  "urgency": {"type": "score", "instructions": "How urgent is this?",
+              "criteria": ["Can wait", "This week", "Today"]},
+  "refund": {"type": "noul", "instructions": "The customer asks for a refund."}
+}</textarea>
+  </div>
+  <button id="run">Decide</button>
+  <div id="out"></div>
+</main>
+<script>
+const out = document.getElementById("out");
+function parseState(text) { try { return JSON.parse(text); } catch { return text; } }
+function bar(label, p) {
+  return `<div class="row"><span>${label}</span><div class="bar"><i style="width:${(p * 100).toFixed(1)}%"></i></div><span>${p.toFixed(3)}</span></div>`;
+}
+document.getElementById("run").onclick = async () => {
+  out.innerHTML = '<div class="meta">deciding…</div>';
+  let questions;
+  try { questions = JSON.parse(document.getElementById("questions").value); }
+  catch (e) { out.innerHTML = `<div class="err">questions is not valid JSON: ${e.message}</div>`; return; }
+  const body = { state: parseState(document.getElementById("state").value), questions };
+  const started = performance.now();
+  const res = await fetch("/v1/systemone", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+  const ms = Math.round(performance.now() - started);
+  const data = await res.json();
+  if (!res.ok) { out.innerHTML = `<div class="err">${res.status}: ${JSON.stringify(data.detail)}</div>`; return; }
+  let html = `<div class="meta">${data.model} · ${data.usage.input_tokens} input tokens · ${ms} ms</div>`;
+  for (const [id, a] of Object.entries(data.answers)) {
+    html += `<div class="q"><b>${id} <span class="meta">${a.type}</span></b>`;
+    if (a.type === "noul") html += bar("yes", a.noul) + bar("no", 1 - a.noul);
+    else {
+      for (const [k, p] of Object.entries(a.probabilities)) html += bar(a.type === "score" ? a.legend[k] : k, p);
+      html += `<div class="meta">${a.type === "choice" ? "choice: " + a.choice : "score: " + a.score.toFixed(2)} · confidence ${a.confidence.toFixed(2)}</div>`;
+    }
+    html += "</div>";
+  }
+  out.innerHTML = html;
+};
+</script>
+</body>
+</html>
