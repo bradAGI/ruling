@@ -153,6 +153,29 @@ Earlier batch, `Qwen3.5-4B-4bit`, kept because these two sets were not re-run.
 SST-5 is a five-way ordinal task where fine-tuned encoders reach about 0.59.
 Zero-shot, from a 4-bit 4B model, 0.53 with an ECE under 0.1 is usable.
 
+
+### Tried and rejected: one-pass Choice above 62 options
+
+The letter readout has 62 single-token codes, so a Choice with more options
+runs as a tournament: every option judged alone as a Noul, the strongest eight
+into a final Choice. Qwen's tokenizer offers 691 single-token codes across
+Greek, Cyrillic, Latin-1, kana and CJK, so a 255-code alphabet was tried to
+read every option in one pass. On the 35B, one ordering, eight real
+77-to-151-option questions from the Decision Index sample:
+
+| readout | correct | time |
+|---|---:|---:|
+| tournament, 62 codes | 5 of 8 | 73 s |
+| one pass, 255 codes | 3 of 8 | 5 s |
+
+Fifteen times faster and worse, with the failure signature of label bias: the
+same unfamiliar glyph was chosen twice for different questions, and a correct
+answer near the end of the alphabet lost to one near the start. Eight rows is
+a small test, but it is the direction predicted before running it, so the
+tournament stays. The speed is real and worth having; getting it without the
+bias would take reading options from one decision position instead of from
+letter tokens, which is a trained head, not a prompt change.
+
 ### Latency and throughput
 
 Median of five requests, short JSON state, engine warm, same batch as the
