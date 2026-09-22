@@ -8,6 +8,7 @@ jobs:
   test:
     # MLX needs Apple Silicon; GitHub's macos-14 runners are M-series.
     runs-on: macos-14
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
@@ -19,5 +20,8 @@ jobs:
           path: ~/.cache/huggingface/hub
           key: hf-${{ runner.os }}-qwen3.5-0.8b-4bit
       - run: uv sync
+      # What MLX thinks it is running on. The runner is a VM; if this prints a CPU
+      # device the integration suite is running the model without a GPU.
+      - run: uv run python -c "import mlx.core as mx; print(mx.default_device(), mx.device_info())"
       - run: uv run pytest tests/unit -q
-      - run: uv run pytest tests/integration -q
+      - run: uv run pytest tests/integration -q --timeout=900 -m "not heavy"

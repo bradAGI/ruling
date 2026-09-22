@@ -12,7 +12,8 @@ from ruling.engine import Engine
 from ruling.train import Trainer, TrainConfig
 from ruling.worlds import Catalog, synthesize
 
-pytestmark = pytest.mark.integration
+# Trains a model in a fixture: two minutes with a GPU, hours without one.
+pytestmark = [pytest.mark.integration, pytest.mark.heavy]
 
 TRAIN_MODEL = os.environ.get("RULING_TRAIN_TEST_MODEL", "mlx-community/Qwen3-4B-Instruct-2507-4bit")
 

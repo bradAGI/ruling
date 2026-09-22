@@ -235,7 +235,7 @@ tests/             unit (no model) and integration (real model, downloads Qwen3.
 
 ```bash
 uv run pytest tests/unit
-uv run pytest tests/integration
+uv run pytest tests/integration                 # CI runs this with -m "not heavy": the two training modules need a GPU
 ```
 
 ## Related work

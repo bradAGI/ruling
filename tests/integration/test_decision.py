@@ -12,7 +12,8 @@ from ruling.decision_train import DecisionTrainConfig, DecisionTrainer
 from ruling.questions import Choice, Noul, Score, SystemOneRequest
 from ruling.server import build_engine, create_app
 
-pytestmark = pytest.mark.integration
+# Trains a model in a fixture: two minutes with a GPU, hours without one.
+pytestmark = [pytest.mark.integration, pytest.mark.heavy]
 
 BASE = ("jhu-clsp/ettin-encoder-150m", "57617ddb6eee7cdeb86dc7b3f76b8a5ac9b8f7b9")
 QUESTIONS = {

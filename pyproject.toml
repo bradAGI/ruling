@@ -27,6 +27,7 @@ ruling = "ruling.cli:main"
 [dependency-groups]
 dev = [
     "pytest>=8",
+    "pytest-timeout>=2.4.0",
     "torch>=2.14.0",
     "typesafe-sdk>=0.6.0",
 ]
@@ -45,4 +46,7 @@ include = ["ruling/**"]
 testpaths = ["tests"]
 # unit/ and integration/ hold same-named modules; importlib mode keeps them distinct.
 addopts = "--import-mode=importlib"
-markers = ["integration: loads a real model; slow on first run"]
+markers = [
+    "integration: loads a real model; slow on first run",
+    "heavy: trains a model or spawns a server; skipped on CI runners without a GPU",
+]
