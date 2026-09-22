@@ -59,18 +59,24 @@ TypeSafe's own official SDK works against it unchanged — point
 `TYPESAFE_BASE_URL` at the server. Details for all of them are in
 [docs/reference.md](docs/reference.md).
 
-## Pick a model
+## Pick the primary model
 
-| you want | set | notes |
+`RULING_MODEL` is the **primary** model: it answers every question. It is the
+only model you need. A **secondary** model is optional — it answers just the
+questions the primary is unsure about, and is set separately with
+`RULING_CASCADE_TO` (next section).
+
+| you want as primary | set | notes |
 |---|---|---|
 | the default | nothing | `mlx-community/Qwen3.5-4B-4bit`, 2.3 GB, 3 questions in ~136 ms |
 | Jev-level accuracy | `RULING_MODEL=mlx-community/Qwen3.6-35B-A3B-4bit` | 19 GB, ~204 ms, the model in the chart above |
 | any other MLX checkpoint | `RULING_MODEL=<hub id or local path>` | tested with Qwen, Llama 3.2, Gemma 3 |
 | a model you serve elsewhere | `RULING_MODEL=openai:<name>` + `RULING_OPENAI_BASE_URL` | vLLM, llama.cpp, `mlx_lm.server`, or a commercial API; needs `top_logprobs` |
 | a model on OpenRouter | `RULING_MODEL=openrouter:<name>` | with a spend budget |
+| Jev itself, or any System One server | `RULING_MODEL=typesafe:<alias>` + `TYPESAFE_API_KEY` | `typesafe:jev-latest`; the host's own probabilities pass straight through. Mostly useful as the secondary, below |
 
-The other settings — token limits, API key, calibration, logprob caps — are in
-[docs/reference.md](docs/reference.md#install-and-run).
+Any of these can also be the secondary. The other settings — token limits, API
+key, calibration, logprob caps — are in [docs/reference.md](docs/reference.md#install-and-run).
 
 ## Make it yours: fine-tune on your own decisions
 
@@ -131,20 +137,26 @@ roughly halved, and confident errors (wrong while reporting p ≥ 0.9) fell
 three- to thirteen-fold. Full card and reproduction in
 [docs/adapter.md](docs/adapter.md).
 
-## Escalate the doubtful questions to a bigger model
+## Escalate the doubtful questions to a secondary model
 
-Once the small model's confidence is honest, one threshold lets a big model
-answer only what the small one is unsure about:
+Once the primary model's confidence is honest, one threshold lets a bigger
+model answer only what the primary is unsure about.
+
+| role | set with | answers | example |
+|---|---|---|---|
+| **primary** | `RULING_MODEL` (+ `RULING_ADAPTER`) | every question | the 4B with your adapter, always loaded |
+| **secondary** | `RULING_CASCADE_TO` | only questions whose top probability is under `RULING_CASCADE_THRESHOLD` | the local 35B, an `openai:` endpoint, or `typesafe:jev-latest` |
 
 ```bash
-RULING_ADAPTER=runs/adapters/mine RULING_CASCADE_TO=mlx-community/Qwen3.6-35B-A3B-4bit \
-RULING_CASCADE_THRESHOLD=0.84 uv run ruling serve
+RULING_MODEL=mlx-community/Qwen3-4B-Instruct-2507-4bit RULING_ADAPTER=runs/adapters/mine \
+RULING_CASCADE_TO=mlx-community/Qwen3.6-35B-A3B-4bit RULING_CASCADE_THRESHOLD=0.84 \
+uv run ruling serve
 ```
 
 Measured with the threshold fitted on one dataset and applied to the other:
-the 35B answered 13% of questions and the pair matched the 35B alone (90 vs 91
-on TypeSafe's rows, 145 vs 144 on Every's). The second model can also be any
-`openai:` endpoint.
+the secondary answered 13% of questions and the pair matched the secondary
+alone (90 vs 91 on TypeSafe's rows, 145 vs 144 on Every's). Set the secondary
+to `typesafe:jev-latest` and the same arithmetic applies to your Jev bill.
 
 ## How good is it
 

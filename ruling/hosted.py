@@ -25,7 +25,8 @@ import numpy as np
 from ruling.calibration import Calibration, Provenance
 from ruling.engine import RawScore, Scored, answer
 from ruling.prompt import SYSTEM_PROMPT, render_question, render_state
-from ruling.questions import Choice, Noul, Score, State, SystemOneRequest, SystemOneResponse, Usage, option_keys
+from ruling.evals import answer_distribution
+from ruling.questions import MAX_CHOICE_OPTIONS, Choice, Noul, Score, State, SystemOneRequest, SystemOneResponse, Usage, option_keys
 
 OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 OPENROUTER_PREFIX = "openrouter:"
@@ -217,3 +218,62 @@ class OpenRouterEngine(HostedEngine):
 
     def charge(self, data: dict) -> None:
         self.budget.charge(float(data["usage"]["cost"]))
+
+
+TYPESAFE_PREFIX = "typesafe:"
+
+
+class TypeSafeEngine:
+    """TypeSafe's hosted API, or any server that speaks its protocol, as an engine.
+
+    The host returns probabilities, so the logits handed back are their logs and
+    the host's own calibration is what you get. Useful for scoring a dataset
+    against the hosted model with the same harness, and as the second stage of
+    a cascade, where a local model answers what it is sure of and only the
+    doubtful questions are paid for.
+    """
+
+    prior_debias = False
+    max_options = MAX_CHOICE_OPTIONS
+    rotations = 1
+    """The host orders options as it sees fit; ruling does not re-ask it."""
+
+    def __init__(self, model: str, calibration: Calibration, base_url: str, api_key: str | None,
+                 max_input_tokens: int, max_branch_tokens: int, client: httpx.Client | None = None):
+        self.remote = model.removeprefix(TYPESAFE_PREFIX)
+        self.model_id = TYPESAFE_PREFIX + self.remote
+        self.revision = None
+        self.adapter = None
+        self.max_input_tokens = max_input_tokens
+        self.max_branch_tokens = max_branch_tokens
+        headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
+        self._client = client or httpx.Client(base_url=base_url.rstrip("/"), headers=headers, timeout=60)
+        calibration.check(self.provenance)
+        self.calibration = calibration
+
+    @property
+    def provenance(self) -> Provenance:
+        return Provenance(self.model_id, self.revision, self.rotations, self.prior_debias, self.adapter)
+
+    def score(self, state: State, questions: dict[str, Choice | Score | Noul]) -> Scored:
+        body = {"state": state, "questions": {qid: q.model_dump(exclude_none=True) for qid, q in questions.items()}}
+        if self.remote:
+            body["model"] = self.remote
+        response = self._client.post("/v1/systemone", json=body)
+        if response.status_code != 200:
+            raise RuntimeError(f"{self.model_id} returned {response.status_code}: {response.text[:500]}")
+        data = response.json()
+        raw = {}
+        for qid, question in questions.items():
+            keys = option_keys(question)
+            distribution = answer_distribution(data["answers"][qid], keys)
+            raw[qid] = RawScore(keys=keys, logits=np.log(np.clip([distribution[k] for k in keys], 1e-12, 1.0)))
+        return Scored(raw=raw, input_tokens=int((data.get("usage") or {}).get("input_tokens") or 0))
+
+    def evaluate(self, request: SystemOneRequest) -> SystemOneResponse:
+        scored = self.score(request.state, request.questions)
+        answers = {qid: answer(request.questions[qid], scored.raw[qid], self.calibration) for qid in request.questions}
+        return SystemOneResponse(model=self.model_id, answers=answers, usage=Usage(input_tokens=scored.input_tokens))
+
+    def answer(self, question, raw: RawScore):
+        return answer(question, raw, self.calibration)

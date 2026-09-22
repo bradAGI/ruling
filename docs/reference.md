@@ -16,7 +16,7 @@ The first start downloads the default model, `mlx-community/Qwen3.5-4B-4bit`
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `RULING_MODEL` | `mlx-community/Qwen3.5-4B-4bit` | Any MLX chat model, `openai:<model>` for a model behind an OpenAI-compatible server, or `openrouter:<model>`. Tested: Qwen3.5, Llama 3.2, Gemma 3 |
+| `RULING_MODEL` | `mlx-community/Qwen3.5-4B-4bit` | The primary model. Any MLX chat model, `openai:<model>` for a model behind an OpenAI-compatible server, `openrouter:<model>`, or `typesafe:<alias>` for TypeSafe's API or any server speaking its protocol (`TYPESAFE_BASE_URL`, `TYPESAFE_API_KEY`). Tested: Qwen3.5, Llama 3.2, Gemma 3 |
 | `RULING_ROTATIONS` | `3` | Answer orderings averaged per question. `1` is fastest. See How it works |
 | `RULING_PRIOR_DEBIAS` | `false` | Subtract a content-free letter prior. Measured, does not help; kept so you can re-check with another model |
 | `RULING_CALIBRATION` | unset | Path to a `calibration.json` written by `ruling calibrate` |
@@ -28,7 +28,7 @@ The first start downloads the default model, `mlx-community/Qwen3.5-4B-4bit`
 | `RULING_OPENAI_TOP_LOGPROBS` | `20` | How many top logprobs the host returns, which is also the option ceiling. OpenAI allows 20, `mlx_lm.server` allows 11 |
 | `RULING_OPENAI_EXTRA_BODY` | `{}` | JSON merged into every request, for host-specific fields such as `{"chat_template_kwargs": {"enable_thinking": false}}` |
 | `RULING_ADAPTER` | unset | A LoRA directory from `ruling train`; see [docs/adapter.md](adapter.md) |
-| `RULING_CASCADE_TO` | unset | A second model that answers the questions the first is unsure about |
+| `RULING_CASCADE_TO` | unset | The secondary model, in the same syntax as `RULING_MODEL`; it answers only the questions the primary is unsure about |
 | `RULING_CASCADE_THRESHOLD` | unset | Top probability below which a question is escalated; required with `RULING_CASCADE_TO` |
 | `RULING_HOST`, `RULING_PORT` | `127.0.0.1`, `8010` | Bind address |
 

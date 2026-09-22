@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import time
 from dataclasses import replace
 from pathlib import Path
@@ -18,7 +19,8 @@ from ruling.cascade import CascadeEngine
 from ruling.config import Settings
 from ruling.decision import DecisionEngine, is_checkpoint
 from ruling.engine import Engine, InputTooLong, model_released
-from ruling.hosted import HOSTED_PREFIX, OPENROUTER_PREFIX, Budget, HostedEngine, OpenRouterEngine
+from ruling.against import API_KEY_ENV, BASE_URL_ENV, DEFAULT_BASE_URL
+from ruling.hosted import HOSTED_PREFIX, OPENROUTER_PREFIX, TYPESAFE_PREFIX, Budget, HostedEngine, OpenRouterEngine, TypeSafeEngine
 from ruling.questions import DEFAULT_MODEL_ALIASES, ModelInfo, ModelList, SystemOneRequest, SystemOneResponse
 
 log = logging.getLogger("ruling")
@@ -39,6 +41,9 @@ def build_engine(settings: Settings):
                                       calibration_path=None))
         return CascadeEngine(first, second, settings.cascade_threshold)
     calibration = Calibration.load(settings.calibration_path) if settings.calibration_path else Calibration()
+    if settings.model.startswith(TYPESAFE_PREFIX):
+        return TypeSafeEngine(settings.model, calibration, os.environ.get(BASE_URL_ENV, DEFAULT_BASE_URL),
+                              os.environ.get(API_KEY_ENV), settings.max_input_tokens, settings.max_branch_tokens)
     if settings.model.startswith(HOSTED_PREFIX):
         if not settings.openai_base_url:
             raise ValueError("set RULING_OPENAI_BASE_URL to the endpoint serving the model, ending in /v1")
