@@ -21,6 +21,9 @@ Jev's 238, exact McNemar p = 0.21. Method, caveats and where Jev leads are
 below; [docs/background.md](docs/background.md) has what Jev is and how the
 other open recreations compare.*
 
+With the server running (`uv run ruling serve`, two commands under Install):
+
+```bash
 curl -s localhost:8010/v1/systemone -H 'content-type: application/json' -d '{
   "state": {"message": "My card was charged twice for one order. Refund the duplicate."},
   "questions": {
@@ -123,11 +126,13 @@ second can be the local 35B or any `openai:` endpoint.
 
 ```bash
 RULING_ADAPTER=runs/adapters/v1 RULING_CASCADE_TO=mlx-community/Qwen3.6-35B-A3B-4bit \
-RULING_CASCADE_THRESHOLD=0.88 uv run ruling serve
+RULING_CASCADE_THRESHOLD=0.84 uv run ruling serve
 ```
 
-Measured on saved predictions, with the threshold fitted on one dataset and
-applied to the other so it is never tuned on the rows it is scored on:
+The 0.84 is the threshold fitted on Every's rows; fitted on TypeSafe's it came
+out at 0.93, and either transfers to the other set. Measured on saved
+predictions, with the threshold fitted on one dataset and applied to the other
+so it is never tuned on the rows it is scored on:
 
 | | 4B + adapter alone | 35B alone | cascade | questions sent to the 35B |
 |---|---:|---:|---:|---:|
@@ -321,8 +326,6 @@ same answers as JSON took 755 ms and 105 tokens, median of three, and the
 generated object invented a `refund` key inside `team` that no schema asked
 for. Reproduce with `uv run --with pillow python assets/replay.py`.*
 
-
-
 1. **One prefix, many suffixes, one forward pass.** The system prompt and the
    rendered state are pushed through the model once and the KV cache is kept.
    Each question becomes a short suffix (instructions, the options labeled
@@ -372,9 +375,10 @@ throughput. Regenerate with `uv run --with matplotlib python assets/charts.py`.*
   requests queue behind a lock. There is no cross-request batching and no
   per-request timeout, because an MLX forward pass cannot be interrupted.
 - Text only. No images, no audio, no generated explanation.
-- macOS on Apple Silicon only, because the inference path is MLX. A PyTorch
-  path for Linux and CUDA would be a second inference engine to keep in sync
-  with the batching and cache logic here, and has not been written.
+- The native engine is MLX, so the fast path is Apple Silicon only. Other
+  hardware runs through `openai:` against vLLM, llama.cpp or a similar server,
+  which works but gives up the shared prefix cache. A native CUDA engine has
+  not been written.
 
 ## Layout
 
@@ -384,14 +388,21 @@ ruling/
   prompt.py        state and question rendering, orderings, the content-free prior prompt
   codes.py         single-token answer codes verified against the tokenizer
   engine.py        MLX scoring: prefix cache, batched suffixes, ordering averaging, two-stage Choice
-  calibration.py   temperature scaling with provenance, confidence, ECE
+  hosted.py        the same readout over any OpenAI-compatible endpoint, and OpenRouter
+  cascade.py       two engines behind one answer, the second for doubtful questions
+  calibration.py   temperature scaling with provenance, confidence, ECE, coverage at an error budget
   evals.py         labeled datasets, metrics, temperature fitting
-  build.py         WANLI and SST-5 builders from pinned revisions
+  against.py       the same records sent to the hosted TypeSafe API, for agreement reports
+  build.py         dataset builders from pinned public sources: WANLI, SST-5, TypeSafe's cases, Every's lab
+  corpus.py, states.py, worlds.py, distill.py   training-corpus construction from public data, program state, synthetic worlds
+  train.py         LoRA fine-tuning of the letter readout, with holdout overlap checks
+  decision.py, decision_train.py, modernbert.py   the parked encoder path, kept for reference
+  thinking.py      lets a teacher model reason before answering, for dataset construction only
+  config.py        settings from the environment, MLX memory limits
   server.py        FastAPI app, bearer auth, request log, playground
   playground.html  browser playground served at /
   sdk.py           Python client
-  cascade.py       two engines behind one answer, the second for doubtful questions
-  cli.py           ruling serve | ask | eval | calibrate | build-dataset
+  cli.py           ruling serve | ask | eval | calibrate | build-dataset | build-corpus | train
 sdks/typescript/   zero-dependency JS client with TypeScript types
 datasets/          labeled JSONL, the WANLI selection manifest, and the format
 assets/replay.py   records the replay GIF above from real timings
