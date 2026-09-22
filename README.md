@@ -2,26 +2,25 @@
 
 Typed decisions from a local model, no text generated. Not affiliated with TypeSafe AI.
 
-An open-weight recreation of [Jev](https://typesafe.ai/blog/introducing-system-one-models-and-jev),
+An open recreation of [Jev](https://typesafe.ai/blog/introducing-system-one-models-and-jev),
 TypeSafe AI's "System One" model. You send a state and typed questions; you get
 back probability distributions over answers you declared, with a confidence
 score, in one request. No text is generated, so there is nothing to parse and
 no way for the model to invent an option you did not list.
 
 It runs on an Apple Silicon Mac with [MLX](https://github.com/ml-explore/mlx)
-and a 4-bit Qwen3.5 checkpoint. No waitlist, no GPU server, no API key. Point
-`RULING_MODEL` at a 19 GB mixture-of-experts model instead and it reaches
-Jev's accuracy on TypeSafe's own evaluation rows; see Measurements.
+and any 4-bit chat checkpoint, or against any OpenAI-compatible endpoint that
+returns logprobs. No training required. TypeSafe's own SDK works against it
+unchanged.
 
-![Measured replay: ruling returns every typed answer at once while the same model streams JSON token by token](assets/replay.gif)
+![Jev against Qwen3.6-35B-A3B on TypeSafe's 102 published rows, Every's 154 author-labeled judgments, and the two pooled](assets/against-jev.png)
 
-*Same 4B model, same state, same three questions, measured on one Mac and
-aligned at t = 0. ruling answered in 119 ms, median of five. Generating the
-same answers as JSON took 755 ms and 105 tokens, median of three, and the
-generated object invented a `refund` key inside `team` that no schema asked
-for. Reproduce with `uv run --with pillow python assets/replay.py`.*
+*Every judgment TypeSafe and Every have published with Jev's own answers
+attached, re-scored by a 19 GB open model with no training: 231 of 256 against
+Jev's 238, exact McNemar p = 0.21. Method, caveats and where Jev leads are
+below; [docs/background.md](docs/background.md) has what Jev is and how the
+other open recreations compare.*
 
-```
 curl -s localhost:8010/v1/systemone -H 'content-type: application/json' -d '{
   "state": {"message": "My card was charged twice for one order. Refund the duplicate."},
   "questions": {
@@ -46,77 +45,6 @@ curl -s localhost:8010/v1/systemone -H 'content-type: application/json' -d '{
   "usage": {"input_tokens": 405, "output_tokens": 0}
 }
 ```
-
-## What Jev is, and what this reproduces
-
-Jev, launched September 15, 2026, is a closed hosted model that answers three
-kinds of typed question against a shared state: **Choice** (one option from a
-set), **Score** (a level on an ordered scale), and **Noul** (is a statement
-true). Every answer carries probabilities. TypeSafe trains it with a method it
-calls RLCD, Reinforcement Learning for Calibrated Decisions, and has published
-neither the architecture, the weights, nor a paper.
-
-Jev's architecture is undisclosed. It is not a fixed-label classifier, because
-it accepts arbitrary instructions, option descriptions, and JSON state at
-request time. A [black-box analysis by Archer
-Hume](https://archerhume.com/posts/jevs-architecture-unmasked/) probes the
-hosted API and concludes it is a causal decoder language model post-trained for
-this contract: the state is shared across questions, each question is scored in
-its own branch that cannot see its siblings, options inside one question
-influence each other, and the answer is read as numbers rather than generated
-as text. TypeSafe has not confirmed that, but it matches every behavior we can
-measure from outside. The mechanism that buys the speed is the same either way:
-encode the input once, read the model's scores at the answer position, restrict
-them to the declared options, normalize. ruling implements that mechanism on a stock
-instruction-tuned open model. On the two fixtures the other open recreation
-published, ruling scores higher than it reported — 0.920 against 0.813 on
-authored144, 0.684 against 0.637 on WANLI (see the comparison at the end). On
-TypeSafe's own published evaluation rows, a 19 GB open model running through
-ruling answers 91 of 102 questions the way TypeSafe's reference does, against
-Jev's 90, with no training of any kind.
-
-| | Jev (hosted) | ruling |
-|---|---|---|
-| Primitives | Choice, Score, Noul | Choice, Score, Noul, same request and response shape |
-| Many questions per call, one state | Yes | Yes. The state is encoded once; every question suffix runs in batched forward passes against replicas of that cache |
-| Probabilities and confidence | Yes | Yes. Confidence uses the formulas from TypeSafe's MIT-licensed client, so the number means the same thing: for Choice, how far the leading option stands above uniform; for Score, how tightly mass sits around the modal level |
-| Calibration | RLCD training, undisclosed | Temperature scaling fit on your labeled data, bound to the model and settings it was fit for |
-| Option-order robustness | Unknown | Averaging over option orderings, on by default |
-| Max options per Choice | 255 | 255. Above the tokenizer's 62 single-token codes a Choice runs in two stages |
-| Structured instructions and descriptions | JSON accepted | JSON accepted |
-| TypeSafe's official SDK | Yes | Yes. Point `TYPESAFE_BASE_URL` at a ruling server and their unmodified client works; there is a test for it |
-| Context | ~32k tokens per question branch, ~64k per request | Same two limits by default, both configurable |
-| Weights | Closed | Any MLX chat model on Hugging Face |
-| Latency, 3 questions, short state | 70 to 500 ms, vendor claim | 80 to 136 ms on a 4B, 141 to 204 ms on the 19 GB model, see Measurements |
-
-Not reproduced: RLCD training, Jev's parallel sampler, and frontier-level
-judgment. Read the Measurements section before trusting any number here.
-
-## ruling versus TheoLeeCJ/openjev
-
-[TheoLeeCJ/openjev](https://github.com/TheoLeeCJ/openjev) is the other open
-recreation, released the same day as Jev. It asks "can a home GPU do what Jev
-does?" and answers with a benchmark. ruling is the thing you call from software.
-Both read option logits from a Qwen3.5-4B model; everything above that differs.
-
-| | TheoLeeCJ/openjev | ruling |
-|---|---|---|
-| Form | Research CLI: JSONL of questions in, results file out | Service: HTTP endpoint with Jev's request and response shape, Python and TypeScript clients, playground, one-shot CLI |
-| Question types | One: pick from up to 16 lettered options | Three, matching Jev: Choice to 255 options, Score, Noul, each with probabilities and confidence |
-| Questions per call | One per row | Any number against one state, one request |
-| Shared-state reuse | Special mode; every row must carry the identical state | Always: state encoded once, all question suffixes in one batched forward pass |
-| Option-order bias | Measured it, 10 of 36 flips, left it | Averaged over orderings; 4 of 144 flips |
-| Calibration | None | Temperature scaling, bound to the model it was fit on |
-| Hardware | CUDA GPU, BF16 | Apple Silicon Mac, 4-bit, no GPU box |
-| authored144, their fixture | 0.813 | **0.920** at 4B, **0.964** at 35B |
-| WANLI 256, their row selection | 0.637 | **0.684** |
-| TypeSafe's public evals, agreement with reference | 0.85 | 0.814 at 4B, **0.892** at 35B |
-| Still theirs | Committed raw predictions, a WebGPU demo | |
-
-Same rows, same metrics, and on the 4B rows ruling runs a quantized version of
-the same base model. Procedures and caveats are in the comparison section at
-the end; the three fixtures in `datasets/` are theirs, converted and credited
-in [THIRD_PARTY.md](THIRD_PARTY.md).
 
 ## Install and run
 
@@ -143,6 +71,9 @@ The first start downloads the default model, `mlx-community/Qwen3.5-4B-4bit`
 | `RULING_OPENAI_API_KEY` | unset | Sent as a bearer token when the host wants one. Local servers usually do not |
 | `RULING_OPENAI_TOP_LOGPROBS` | `20` | How many top logprobs the host returns, which is also the option ceiling. OpenAI allows 20, `mlx_lm.server` allows 11 |
 | `RULING_OPENAI_EXTRA_BODY` | `{}` | JSON merged into every request, for host-specific fields such as `{"chat_template_kwargs": {"enable_thinking": false}}` |
+| `RULING_ADAPTER` | unset | A LoRA directory from `ruling train`; see [docs/adapter.md](docs/adapter.md) |
+| `RULING_CASCADE_TO` | unset | A second model that answers the questions the first is unsure about |
+| `RULING_CASCADE_THRESHOLD` | unset | Top probability below which a question is escalated; required with `RULING_CASCADE_TO` |
 | `RULING_HOST`, `RULING_PORT` | `127.0.0.1`, `8010` | Bind address |
 
 ### Bring your own model
@@ -182,6 +113,30 @@ uv run ruling ask "Since this morning every request with our API key returns 401
   --score  "urgency=How urgent is this?|Can wait,This week,Today" \
   --noul   "blocked=The customer is blocked from using the product."
 ```
+
+## Escalate only the doubtful questions
+
+`RULING_CASCADE_TO` names a second model that answers whichever questions the
+first one is unsure about, judged by calibrated top probability against
+`RULING_CASCADE_THRESHOLD`. The first model can be the 4B with its adapter; the
+second can be the local 35B or any `openai:` endpoint.
+
+```bash
+RULING_ADAPTER=runs/adapters/v1 RULING_CASCADE_TO=mlx-community/Qwen3.6-35B-A3B-4bit \
+RULING_CASCADE_THRESHOLD=0.88 uv run ruling serve
+```
+
+Measured on saved predictions, with the threshold fitted on one dataset and
+applied to the other so it is never tuned on the rows it is scored on:
+
+| | 4B + adapter alone | 35B alone | cascade | questions sent to the 35B |
+|---|---:|---:|---:|---:|
+| TypeSafe 102 | 86 | 91 | 90 | 13.7% |
+| Every 154 | 141 | 144 | 145 | 13.0% |
+
+The cascade does not beat the larger model; it matches it while that model
+runs on one question in eight. It works because the adapter made the small
+model's confidence trustworthy: see coverage below.
 
 ## API
 
@@ -279,9 +234,94 @@ const { answers } = await new RulingClient().systemOne({ state, questions: { tea
 ```
 
 The thresholds belong in your code, versioned and tested. Fit them on labeled
-data from your own traffic; see Calibration.
+data from your own traffic; see [calibration](docs/measurements.md#evaluation-and-calibration).
+
+## Measurements, summarized
+
+Every number here comes from one batch on 18 September 2026, one Mac, four
+models against four held-out sets. The full record, with every setting and the
+commands to reproduce each cell, is in [docs/measurements.md](docs/measurements.md).
+
+### Every model on every held-out set
+
+Accuracy, as argmax agreement with each set's own reference labels. `r` is the
+number of option orderings averaged per question.
+
+| model | typesafe102 (102) | authored144 (144) | perturbations108 (108) | Every (154) |
+|---|---|---|---|---|
+| | r=1 / r=3 / r=6 | r=1 / r=3 / r=6 | r=1 / r=3 / r=6 | r=1 / r=3 |
+| Qwen3.5-4B, the default | 0.804 / 0.814 / 0.814 | 0.882 / 0.917 / 0.917 | 0.861 / 0.907 / 0.907 | 0.916 / 0.929 |
+| Qwen3-4B-Instruct-2507 | 0.765 / 0.833 / 0.833 | 0.840 / 0.875 / 0.875 | 0.833 / 0.861 / 0.861 | 0.916 / 0.916 |
+| Qwen3-4B-Instruct + our adapter | 0.794 / 0.843 / 0.843 | 0.861 / 0.889 / 0.889 | 0.861 / 0.861 / 0.861 | 0.903 / 0.916 |
+| Qwen3.6-35B-A3B, 19 GB | 0.853 / 0.873 / **0.892** | 0.938 / 0.958 / 0.958 | 0.935 / 0.954 / 0.954 | **0.935** / 0.922 |
+| Jev, published | 0.882 | — | — | 0.961 |
+
+Jev has one number per set because rotations are ruling's setting, not
+TypeSafe's, and it has no entry on the two authored fixtures because those are
+[TheoLeeCJ's](https://github.com/TheoLeeCJ/openjev) and Jev was never run on
+them. Every skips r=6: its questions carry at most three options, and the
+engine caps orderings at the option count, so r=6 there is the same computation
+as r=3.
+
+![Agreement with TypeSafe's reference against latency for three questions, with Jev's published accuracy marked](assets/frontier.png)
+
+*What each model costs for what it gets right. Jev's line is its published
+accuracy; its latency is a vendor range, 70 to 500 ms, so it is drawn as a line
+rather than a point.*
+
+**Coverage at a 5% error budget** is the share of decisions you could automate,
+accepting in confidence order, before the accepted set exceeds 5% errors. It is
+what a threshold or a cascade actually depends on, and a temperature cannot
+move it, because it measures the ordering. Three orderings, same batch:
+
+| | TypeSafe 102 | Every 154 | authored144 | perturbations108 |
+|---|---:|---:|---:|---:|
+| Qwen3.5-4B | 0.608 | 0.818 | 0.924 | 0.907 |
+| Qwen3-4B-Instruct | 0.216 | 0.929 | 0.847 | 0.657 |
+| ↳ + our adapter | 0.392 | 0.948 | 0.882 | 0.815 |
+| Qwen3.6-35B-A3B | 0.716 | 0.948 | 1.000 | 1.000 |
+| **Jev, published** | **0.784** | **1.000** | — | — |
+
+The adapter roughly doubles the trainable 4B's coverage on TypeSafe's rows and
+cuts its confident errors (wrong at p ≥ 0.9) from 13.7% to 9.8%, 9.0% to 0.7% on
+authored144, 9.3% to 1.9% on perturbations108. Its accuracy barely moves; its
+usefulness for automation does. The adapter's card is at
+[docs/adapter.md](docs/adapter.md).
+
+## Where Jev leads
+
+The headline tie is real and so is this list. On the same rows, Jev is ahead on:
+
+- **Every's 154 author-labeled judgments.** 148 against the 35B's 142 (p = 0.07
+  on that set alone). This is the cleanest accuracy comparison we have, and Jev
+  wins it.
+- **Confidence ordering.** Pooled over all 256 replayable judgments, Jev's
+  coverage at 5% error is 0.961 against the 35B's 0.863, and its confident-error
+  rate is 0.4% against 3.5%. When Jev says 0.95 it is almost never wrong; our
+  models are wrong at that confidence nine times as often. This is the gap that
+  matters for automation, and post-training narrowed it without closing it.
+- **Distributions, not just argmax.** Jev's probabilities sit closer to
+  TypeSafe's reference than ours (0.130 against 0.142 mean total variation) even
+  where the argmax agrees.
+- **Long, knowledge-heavy inputs.** Other replications that run Jev on MMLU-style
+  and multi-hop policy items ([Kev](https://github.com/jaredpalmer/kev),
+  [decider](https://github.com/Mapika/decider)) report Jev 10 to 18 points ahead
+  there; we have not measured that suite yet and expect the same.
+- **No ordering averaging needed.** Jev reads the option list once and is
+  order-stable enough not to need three passes. We buy the same stability with
+  rotations, at the cost of extra suffix rows.
 
 ## How it works
+
+![Measured replay: ruling returns every typed answer at once while the same model streams JSON token by token](assets/replay.gif)
+
+*Same 4B model, same state, same three questions, measured on one Mac and
+aligned at t = 0. ruling answered in 119 ms, median of five. Generating the
+same answers as JSON took 755 ms and 105 tokens, median of three, and the
+generated object invented a `refund` key inside `team` that no schema asked
+for. Reproduce with `uv run --with pillow python assets/replay.py`.*
+
+
 
 1. **One prefix, many suffixes, one forward pass.** The system prompt and the
    rendered state are pushed through the model once and the KV cache is kept.
@@ -323,249 +363,6 @@ the GPU compute-bound; decoding reads the whole model out of memory for each
 token it emits and leaves it memory-bound at about a fortieth of the
 throughput. Regenerate with `uv run --with matplotlib python assets/charts.py`.*
 
-## Evaluation and calibration
-
-Datasets are JSONL records with a state, questions in the API shape, and a
-label per question. Four are bundled and two more build from pinned public
-sources; see [datasets/README.md](datasets/README.md).
-
-```bash
-uv run ruling eval datasets/authored144.jsonl                   # metrics per question type
-uv run ruling eval datasets/authored144.jsonl --rotations 1     # same, one ordering
-uv run ruling build-dataset wanli --output datasets/wanli256.jsonl
-uv run ruling calibrate datasets/wanli256.jsonl --output calibration.json
-RULING_CALIBRATION=calibration.json uv run ruling serve
-```
-
-`eval` reports, per question type: accuracy, balanced accuracy, mean
-per-family balanced accuracy when records carry a `family`, expected
-calibration error, Brier score, negative log-likelihood, and mean confidence.
-For Choice questions it also scores every record with the options reversed and
-reports how many argmax answers flip. Reports record the model's Hugging Face
-revision and the scoring settings.
-
-`calibrate` fits one temperature per question type by minimizing negative
-log-likelihood. The file records the model, revision, rotation count, and
-debiasing setting it was fit under, and the server refuses to load it against
-anything else.
-
-## Measurements
-
-Every number in this section comes from one batch, run on 18 September 2026 on
-a single Apple Silicon Mac: one code version, one sitting, four models against
-the same four held-out sets, with no calibration file loaded (temperature 1.0)
-and prior debiasing off. Reproduce a cell with
-
-```bash
-uv run ruling eval <dataset> --model <model> --rotations <n>
-```
-
-**How the defaults were chosen, and what leaked.** `RULING_ROTATIONS=3` was
-originally picked because it scored best on `authored144`, so that set is not
-clean evidence for it. TypeSafe's 102 rows and Every's 154 were scored
-afterwards and confirm it independently. Prior debiasing was tried the same way
-and lost on every model and dataset, so it ships off.
-
-### Every model on every held-out set
-
-Accuracy, as argmax agreement with each set's own reference labels. `r` is the
-number of option orderings averaged per question.
-
-| model | typesafe102 (102) | authored144 (144) | perturbations108 (108) | Every (154) |
-|---|---|---|---|---|
-| | r=1 / r=3 / r=6 | r=1 / r=3 / r=6 | r=1 / r=3 / r=6 | r=1 / r=3 |
-| Qwen3.5-4B, the default | 0.804 / 0.814 / 0.814 | 0.882 / 0.917 / 0.917 | 0.861 / 0.907 / 0.907 | 0.916 / 0.929 |
-| Qwen3-4B-Instruct-2507 | 0.765 / 0.833 / 0.833 | 0.840 / 0.875 / 0.875 | 0.833 / 0.861 / 0.861 | 0.916 / 0.916 |
-| Qwen3-4B-Instruct + our adapter | 0.794 / 0.843 / 0.843 | 0.861 / 0.889 / 0.889 | 0.861 / 0.861 / 0.861 | 0.903 / 0.916 |
-| Qwen3.6-35B-A3B, 19 GB | 0.853 / 0.873 / **0.892** | 0.938 / 0.958 / 0.958 | 0.935 / 0.954 / 0.954 | **0.935** / 0.922 |
-| Jev, published | 0.882 | — | — | 0.961 |
-
-Jev has one number per set because rotations are ruling's setting, not
-TypeSafe's, and it has no entry on the two authored fixtures because those are
-[TheoLeeCJ's](https://github.com/TheoLeeCJ/openjev) and Jev was never run on
-them. Every skips r=6: its questions carry at most three options, and the
-engine caps orderings at the option count, so r=6 there is the same computation
-as r=3.
-
-![Agreement with TypeSafe's reference against latency for three questions, with Jev's published accuracy marked](assets/frontier.png)
-
-*What each model costs for what it gets right. Jev's line is its published
-accuracy; its latency is a vendor range, 70 to 500 ms, so it is drawn as a line
-rather than a point.*
-
-### What ordering averaging buys
-
-![Accuracy against the number of option orderings averaged, for four models on four held-out sets](assets/rotations.png)
-
-Going from one ordering to three is worth 1 to 5 questions on every model and
-set. Going from three to six changes nothing anywhere except TypeSafe's rows,
-where the 35B gains two more — and those are the only questions in any of these
-sets with five options. `Engine._rotations_for` caps orderings at the number of
-options, so the flat cells are flat by construction, not by chance.
-
-The dashed line is Jev's published figure on the two sets where it has one. The
-flat right-hand halves are the cap at work, and the 35B crossing Jev on
-TypeSafe's rows at six orderings is the only crossing anywhere in these panels.
-
-What averaging reliably buys is order stability. Rescoring every row with its
-options reversed, counting answers that flip:
-
-| model | authored144 r=1 | r=3 | Every r=1 | r=3 |
-|---|---:|---:|---:|---:|
-| Qwen3.5-4B | 15 | 6 | 26 | 5 |
-| Qwen3-4B-Instruct | 15 | 5 | 29 | 12 |
-| Qwen3-4B-Instruct + adapter | 12 | 3 | 24 | 6 |
-| Qwen3.6-35B-A3B | 6 | 4 | 9 | 3 |
-
-### What post-training bought
-
-The adapter weights are not published; the corpus and the run that produced
-them are. `ruling build-corpus public|states|worlds` rebuilds the training
-records from pinned public datasets and the generators in this repository, and
-the command below reproduces the adapter on a Mac in about 40 minutes:
-
-```bash
-uv run ruling train \
-  --data runs/pool/public.jsonl runs/pool/states.jsonl runs/pool/worlds.jsonl \
-  --holdout datasets/authored144.jsonl datasets/perturbations108.jsonl \
-  --model mlx-community/Qwen3-4B-Instruct-2507-4bit --output runs/adapters/v1
-```
-
-`ruling train` fine-tuned a LoRA adapter on 27,021 constructed records —
-reframed public datasets, generated program states, and synthetic worlds — with
-every evaluation set above passed to `--holdout`. In-distribution validation
-accuracy went from 0.607 to 0.844.
-
-Held out, the adapter is worth 1 to 3 questions of accuracy at one ordering and
-approximately nothing at three. What it does move is calibration, in all eleven
-comparisons:
-
-![Expected calibration error before and after the adapter, on four held-out sets](assets/calibration.png)
-
-| set | expected calibration error, base → adapter |
-|---|---|
-| typesafe102 r=1 | 0.228 → 0.162 |
-| typesafe102 r=3 | 0.150 → 0.122 |
-| authored144 r=3 | 0.108 → **0.055** |
-| perturbations108 r=3 | 0.124 → **0.045** |
-| Every r=3 | 0.084 → 0.059 |
-
-Training on a proper scoring rule made the probabilities honest without making
-the judgments better, and the effect carried to distributions the adapter never
-saw. The accuracy gain concentrates at r=1 and vanishes by r=3, which says
-training and ordering averaging are correcting the same defect — positional
-bias — and do not stack. With the adapter you can run one ordering and keep
-three-ordering accuracy, at half the latency.
-
-### Noul and Score, held out
-
-Earlier batch, `Qwen3.5-4B-4bit`, kept because these two sets were not re-run.
-
-| Dataset | Rows | Type | Metric | r=1 | r=3 |
-|---|---:|---|---|---:|---:|
-| WANLI | 256 | noul, "the evidence establishes this claim" | balanced accuracy | **0.853** | 0.827 |
-| | | | ECE | 0.048 | 0.081 |
-| SST-5 | 300 | score, five sentiment levels | accuracy | **0.530** | 0.487 |
-| | | | balanced accuracy | 0.477 | 0.464 |
-| | | | ECE | 0.086 | 0.121 |
-
-SST-5 is a five-way ordinal task where fine-tuned encoders reach about 0.59.
-Zero-shot, from a 4-bit 4B model, 0.53 with an ECE under 0.1 is usable.
-
-### Latency and throughput
-
-Median of five requests, short JSON state, engine warm, same batch as the
-accuracy numbers above.
-
-| Request | | Qwen3.5-4B | Qwen3-4B-Instruct | Qwen3.6-35B-A3B |
-|---|---|---:|---:|---:|
-| 3 questions (Choice + Score + Noul) | r=1 | 80 ms | 78 ms | 141 ms |
-| | r=3 | 136 ms | 116 ms | 204 ms |
-| 21 Noul questions, one state | r=1 | 216 ms, 97/s | 178 ms, 118/s | 263 ms, 80/s |
-| | r=3 | 495 ms, 42/s | 399 ms, 53/s | 606 ms, 35/s |
-
-Every setting lands inside Jev's claimed 70 to 500 ms window for the
-three-question request, including the 35B that reaches Jev's accuracy on
-TypeSafe's rows. Run-to-run variation is real: the 35B measured 228 ms at r=3 a
-day earlier on the same machine, about 10% above this batch. Measured on an
-idle machine; under concurrent load the same requests took two to three times
-longer, because requests queue behind a lock rather than batching together.
-
-## Against Jev itself
-
-Two public sources carry Jev's own answers on inputs anyone can replay.
-`ruling build-dataset typesafe` and `ruling build-dataset every` rebuild them
-with Jev's answer attached to every question, and `ruling eval` reports how
-often ruling lands on the same answer. Both were run with the default
-settings; the one-ordering numbers are in parentheses.
-
-![Jev against Qwen3.6-35B-A3B on TypeSafe's 102 published rows, Every's 154 author-labeled judgments, and the two pooled](assets/against-jev.png)
-
-**TypeSafe's published evaluation cases, 102 questions.** TypeSafe's
-reference is the mean of GPT-6 Astra and Claude Fable 5.1 at high reasoning,
-so this measures agreement with large models on workflows TypeSafe built,
-not accuracy against truth.
-
-| System | Agrees with TypeSafe's reference | Agrees with Jev's argmax |
-|---|---:|---:|
-| ruling, 35B-A3B, r=6 | **0.892** (91/102) | 0.853 |
-| Jev, published | 0.882 (90/102) | |
-| ruling, 35B-A3B, r=3 | 0.873 (89/102) | 0.853 |
-| ruling, 35B-A3B, r=1 | 0.853 (87/102) | 0.833 |
-| TheoLeeCJ/openjev, 4B BF16 | 0.85 | |
-| ruling, Qwen3-4B-Instruct + adapter, r=3 | 0.843 (86/102) | 0.824 |
-| ruling, Qwen3.5-4B, r=3 | 0.814 (83/102) | 0.824 |
-
-On the default 4B model Jev is better here by about seven points, and on the
-35B the two are level: 91 of 102 against Jev's 90 of 102. One question is a tie,
-not a lead.
-
-Pooled with Every's 154 labeled judgments — every row anywhere that carries
-Jev's own answer — the 35B at shipped defaults gets 231 of 256 and Jev gets
-238. An exact McNemar test on the paired rows gives **p = 0.21**: no
-significant difference, with Jev nominally ahead. Taking the best rotation
-setting per dataset instead gives 235 of 256 and p = 0.66; that number is
-recorded here rather than quoted, because choosing a setting per dataset is
-tuning on the evaluation.
-
-**[Every's parallel judgment lab](https://typesafe-parallel-judgment-lab.every-4573.chatgpt.site/),
-758 judgments on 208 documents.** Every recorded Jev's answers for nine
-experiments in August 2026. Three of them
-carry author labels (the support-reply judge grid and two retrieval grids,
-154 judgments); the rest measure agreement only.
-
-| | Jev | Qwen3.5-4B | 35B-A3B |
-|---|---:|---:|---:|
-| Accuracy on the 154 author-labeled judgments | **0.961** | 0.929 (0.916) | 0.922 (0.935) |
-| Agreement with Jev, all 758 judgments | | 0.858 (0.832) | 0.922 (0.921) |
-
-Jev leads on the author-labeled rows by three points against the 4B and four
-against the 35B; these 154 rows are the one place in this README where Jev is
-ahead of everything we run. The 35B tracks Jev's own answers much more closely
-than the 4B does, 0.922 against 0.858 across all 758 judgments. Note that both
-open models score *higher* than the 35B on the labeled subset at three
-orderings while agreeing with Jev *less* — agreement with Jev and accuracy
-against the authors are different measurements, and this set is small enough
-that a few questions separate them.
-
-**What the published data says about Jev's mechanism.** Every's file records
-token usage per experiment. Jev reports almost exactly 16 output tokens per
-judgment in every experiment (16.0 to 17.0 across six of them, from 5 to 21
-questions per call), and roughly 350 to 400 input tokens per call beyond the
-document and question text. A constant per-question output budget is
-consistent with a fixed answer block computed in parallel per question rather
-than a decoded string. Probabilities are published to two decimals. The
-models endpoint lists `jev-latest`, released 2026-09-10, and `jev-preview`.
-
-**Live comparison.** `ruling eval <dataset> --against typesafe` sends every
-record to the hosted API with `TYPESAFE_API_KEY` and reports Jev's live
-answers next to ruling's on the same rows, including the author-labeled
-datasets above where Jev has never been measured. The client speaks
-TypeSafe's protocol, which is the same as ruling's, and is tested end to end
-against a ruling server. It needs API credits on the TypeSafe account; the
-run for this README stopped at `402 Payment Required` before any call was
-scored.
-
 ## Limits
 
 - Probabilities are model scores. Calibration makes them honest on average on
@@ -593,11 +390,13 @@ ruling/
   server.py        FastAPI app, bearer auth, request log, playground
   playground.html  browser playground served at /
   sdk.py           Python client
+  cascade.py       two engines behind one answer, the second for doubtful questions
   cli.py           ruling serve | ask | eval | calibrate | build-dataset
 sdks/typescript/   zero-dependency JS client with TypeScript types
 datasets/          labeled JSONL, the WANLI selection manifest, and the format
 assets/replay.py   records the replay GIF above from real timings
-assets/charts.py   redraws the figures in Measurements from the evaluation JSON
+assets/charts.py   redraws the figures from the evaluation JSON
+docs/              the full measurement record, background on Jev and the other recreations, the adapter card
 tests/unit         no model needed
 tests/integration  real model (RULING_TEST_MODEL, default Qwen3.5-0.8B-4bit); node for the JS client test
 .github/workflows  CI on GitHub's Apple Silicon macOS runners
@@ -608,50 +407,6 @@ uv run pytest tests/unit
 uv run pytest tests/integration                                   # downloads the 0.8B test model on first run
 RULING_SMOKE_MODELS=mlx-community/Llama-3.2-1B-Instruct-4bit uv run pytest tests/integration/test_models.py
 ```
-
-## Comparison with TheoLeeCJ/openjev, procedures and caveats
-
-The summary table is near the top. This section shows where each number comes
-from and what does not compare cleanly.
-
-**Same rows, both systems**
-
-| Dataset | Metric | TheoLeeCJ, 4B BF16 | ruling r=1, 4B 4-bit | ruling r=3 (default), 4B 4-bit | ruling r=3, 35B 4-bit |
-|---|---|---:|---:|---:|---:|
-| authored144 | mean family balanced accuracy | 0.813 | 0.884 | 0.920 | **0.964** |
-| perturbations108 | mean family balanced accuracy | | 0.850 | 0.909 | **0.954** |
-| WANLI 256 | balanced accuracy | 0.637 | **0.684** | 0.672 | |
-
-Same rows, same metric definitions, their numbers read from their published
-results. ruling runs a 4-bit quantization of the same base model, which if
-anything favors them.
-
-**Order stability, related but not identical procedures**
-
-| System | Procedure | Flip rate |
-|---|---|---:|
-| TheoLeeCJ | 36 base cases, each compared with its reversed-option twin | 10 of 36, 28% |
-| ruling r=1, 4B | every row of authored144 rescored with options reversed | 15 of 144, 10.4% |
-| ruling r=3 (default), 4B | same | 6 of 144, 4.2% |
-| ruling r=3 (default), 4B | every row of perturbations108 rescored with options reversed | 4 of 108, 3.7% |
-| ruling r=3, 35B | every row of authored144 rescored with options reversed | 4 of 144, 2.8% |
-
-Both procedures ask the same question, does the argmax survive reversing the
-options, but on different row sets, so compare the rates loosely.
-
-**Throughput, not a controlled comparison**
-
-For 21 binary decisions against one state they report 1,023 ms with batched
-suffixes on an RTX 3090 in BF16. ruling measures 216 ms at one ordering and 495 ms
-at three on an Apple Silicon Mac in 4-bit, on a different state. Hardware,
-precision, and inputs all differ; the numbers show both are in the same range,
-nothing finer.
-
-**Where they are still ahead**
-
-- Committed raw per-row predictions with checksums. ruling reports are
-  regenerated by command, not committed.
-- A browser-only WebGPU demo.
 
 ## Other related work
 

@@ -6,4 +6,4 @@ dist/
 reports/
 calibration.json
 runs/
-docs/
+docs/model-design.md
