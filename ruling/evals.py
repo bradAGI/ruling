@@ -11,6 +11,7 @@ balanced-accuracy reporting.
 from __future__ import annotations
 
 import json
+import time
 from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
@@ -22,6 +23,8 @@ from ruling.calibration import (
     Calibration,
     Provenance,
     choice_confidence,
+    confident_error_rate,
+    coverage_at_error,
     expected_calibration_error,
     fit_temperature,
     softmax,
@@ -30,6 +33,10 @@ from ruling.engine import InputTooLong
 from ruling.questions import Choice, Noul, Question, Score, State, option_keys
 
 Distribution = dict[str, float]
+
+
+ERROR_BUDGET = 0.05
+"""The error rate a deployment accepts among automated decisions; coverage is reported against it."""
 
 
 class Record(BaseModel):
@@ -66,6 +73,8 @@ class Observation:
     label: int | None
     references: dict[str, np.ndarray]
     reversed_argmax: int | None
+    latency_ms: float | None = None
+    """Wall time for the whole record's request, on every observation the request produced."""
 
 
 def load_dataset(path: Path) -> list[Record]:
@@ -112,6 +121,7 @@ def collect(engine, records: list[Record], extra_references: dict[tuple[int, str
     """
     observations = []
     for index, record in enumerate(records):
+        started = time.perf_counter()
         try:
             scored = engine.score(record.state, record.questions)
         except InputTooLong:
@@ -126,6 +136,7 @@ def collect(engine, records: list[Record], extra_references: dict[tuple[int, str
             for qid, q in record.questions.items()
             if isinstance(q, Choice)
         }
+        latency_ms = (time.perf_counter() - started) * 1000
         reversed_scored = engine.score(record.state, reversed_questions) if reversed_questions else None
         for qid, question in record.questions.items():
             raw = scored.raw[qid]
@@ -147,6 +158,7 @@ def collect(engine, records: list[Record], extra_references: dict[tuple[int, str
                     label=label_index(question, record.labels[qid]) if qid in record.labels else None,
                     references={name: np.array([d[k] for k in raw.keys]) for name, d in references.items()},
                     reversed_argmax=reversed_argmax,
+                    latency_ms=latency_ms,
                 )
             )
     return observations
@@ -169,6 +181,11 @@ def report(observations: list[Observation], calibration: Calibration) -> dict:
     for obs in observations:
         by_type[obs.question_type].append(obs)
     result = {"question_types": {}}
+    latencies = sorted({(o.record, o.latency_ms) for o in observations if o.latency_ms is not None})
+    if latencies:
+        values = np.array([ms for _, ms in latencies])
+        result["latency_ms"] = {"p50": float(np.percentile(values, 50)), "p95": float(np.percentile(values, 95)),
+                                "records": len(values)}
     for question_type, everything in by_type.items():
         group = [o for o in everything if o.logits is not None]
         if not group:
@@ -190,6 +207,8 @@ def report(observations: list[Observation], calibration: Calibration) -> dict:
                 "expected_calibration_error": expected_calibration_error([float(p.max()) for _, p in labeled], correct),
                 "brier": float(np.mean([((p - np.eye(len(p))[g]) ** 2).sum() for (_, p), g in zip(labeled, gold)])),
                 "negative_log_likelihood": float(np.mean([-np.log(max(p[g], 1e-12)) for (_, p), g in zip(labeled, gold)])),
+                "coverage_at_5pct_error": coverage_at_error([float(p.max()) for _, p in labeled], correct, ERROR_BUDGET),
+                "confident_error_rate": confident_error_rate([float(p.max()) for _, p in labeled], correct),
             })
             families = defaultdict(list)
             for (o, _), p, g in zip(labeled, predicted, gold):

@@ -50,6 +50,8 @@ class Settings:
     api_key: str | None = None
     cache_limit_gb: float = 4.0
     memory_fraction: float = 0.5
+    cascade_to: str | None = None
+    cascade_threshold: float | None = None
     openai_base_url: str = ""
     openai_api_key: str | None = None
     openai_top_logprobs: int = TOP_LOGPROBS
@@ -75,6 +77,8 @@ class Settings:
             api_key=env.get("RULING_API_KEY") or None,
             cache_limit_gb=float(env.get("RULING_CACHE_LIMIT_GB", cls.cache_limit_gb)),
             memory_fraction=float(env.get("RULING_MEMORY_FRACTION", cls.memory_fraction)),
+            cascade_to=env.get("RULING_CASCADE_TO") or None,
+            cascade_threshold=float(env["RULING_CASCADE_THRESHOLD"]) if env.get("RULING_CASCADE_THRESHOLD") else None,
             openai_base_url=env.get("RULING_OPENAI_BASE_URL", cls.openai_base_url),
             openai_api_key=env.get("RULING_OPENAI_API_KEY") or None,
             openai_top_logprobs=int(env.get("RULING_OPENAI_TOP_LOGPROBS", cls.openai_top_logprobs)),

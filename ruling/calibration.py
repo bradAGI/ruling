@@ -139,6 +139,34 @@ def fit_temperature(logits: list[np.ndarray], labels: list[int]) -> float:
     return math.exp((lo + hi) / 2)
 
 
+def coverage_at_error(confidence: list[float], correct: list[bool], budget: float) -> float:
+    """The largest share of decisions acceptable in descending-confidence order while the
+    error rate among the accepted stays within `budget`.
+
+    This is jev-benchmarks' selective-automation metric. Equal confidences are admitted as
+    a whole group, so a permutation of tied rows cannot change the answer. A model that
+    is confidently wrong scores low here whatever its accuracy; a temperature cannot move
+    it, because the order is what is measured.
+    """
+    if not 0 <= budget <= 1:
+        raise ValueError("error budget must be within [0, 1]")
+    confidence, correct = np.asarray(confidence, dtype=np.float64), np.asarray(correct, dtype=bool)
+    if confidence.size == 0:
+        return 0.0
+    order = np.argsort(-confidence, kind="stable")
+    ranked, errors = confidence[order], np.cumsum(~correct[order])
+    group_ends = np.r_[np.flatnonzero(ranked[1:] != ranked[:-1]), ranked.size - 1]
+    accepted = group_ends + 1
+    within = np.flatnonzero(errors[group_ends] <= budget * accepted)
+    return float(accepted[within[-1]] / ranked.size) if within.size else 0.0
+
+
+def confident_error_rate(confidence: list[float], correct: list[bool], threshold: float = 0.9) -> float:
+    """The share of all decisions that were wrong while reporting at least `threshold`."""
+    confidence, correct = np.asarray(confidence, dtype=np.float64), np.asarray(correct, dtype=bool)
+    return float(np.mean((confidence >= threshold) & ~correct)) if confidence.size else 0.0
+
+
 def expected_calibration_error(top_probabilities: list[float], correct: list[bool], bins: int = 10) -> float:
     """Gap between stated top-1 probability and observed accuracy, weighted by bin size."""
     if not top_probabilities:

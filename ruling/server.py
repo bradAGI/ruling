@@ -4,13 +4,17 @@ from __future__ import annotations
 
 import logging
 import time
+from dataclasses import replace
 from pathlib import Path
 
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
+from dataclasses import replace
+
 from ruling.calibration import Calibration
+from ruling.cascade import CascadeEngine
 from ruling.config import Settings
 from ruling.decision import DecisionEngine, is_checkpoint
 from ruling.engine import Engine, InputTooLong, model_released
@@ -22,7 +26,18 @@ PLAYGROUND = Path(__file__).with_name("playground.html")
 
 
 def build_engine(settings: Settings):
-    """Any OpenAI-compatible host, OpenRouter, a trained decision checkpoint, or a local decoder."""
+    """Any OpenAI-compatible host, OpenRouter, a trained decision checkpoint, or a local decoder.
+
+    With `cascade_to` set, that model answers whichever questions the first one is
+    unsure about, judged against `cascade_threshold`.
+    """
+    if settings.cascade_to:
+        if settings.cascade_threshold is None:
+            raise ValueError("set RULING_CASCADE_THRESHOLD, the top probability below which a question is escalated")
+        first = build_engine(replace(settings, cascade_to=None))
+        second = build_engine(replace(settings, model=settings.cascade_to, cascade_to=None, adapter_path=None,
+                                      calibration_path=None))
+        return CascadeEngine(first, second, settings.cascade_threshold)
     calibration = Calibration.load(settings.calibration_path) if settings.calibration_path else Calibration()
     if settings.model.startswith(HOSTED_PREFIX):
         if not settings.openai_base_url:

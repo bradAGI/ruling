@@ -101,3 +101,27 @@ def test_cli_bounds_the_mlx_buffer_cache(tmp_path, monkeypatch):
     main(["build-corpus", "states", "--output", str(tmp_path / "s.jsonl"), "--count", "4"])
     assert mx.set_cache_limit(0) == int(1.5 * 2**30)
     assert mx.set_memory_limit(mx.device_info()["memory_size"]) == int(mx.device_info()["memory_size"] * 0.4)
+
+
+def test_coverage_admits_confident_correct_rows_and_stops_at_the_budget():
+    from ruling.calibration import confident_error_rate, coverage_at_error
+
+    confidence = [0.99, 0.95, 0.90, 0.80, 0.70, 0.60]
+    correct = [True, True, False, True, True, True]
+    # Three accepted rows carry one error: 33% > 5%, so only the first two are covered.
+    assert coverage_at_error(confidence, correct, 0.05) == pytest.approx(2 / 6)
+    # A generous budget covers everything.
+    assert coverage_at_error(confidence, correct, 0.5) == 1.0
+    # Honest probabilities cover everything; confidently wrong ones cover nothing.
+    assert coverage_at_error([0.9, 0.9], [True, True], 0.05) == 1.0
+    assert coverage_at_error([0.99, 0.5], [False, True], 0.05) == 0.0
+    assert confident_error_rate(confidence, correct) == pytest.approx(1 / 6)
+
+
+def test_coverage_treats_tied_confidences_as_one_group():
+    from ruling.calibration import coverage_at_error
+
+    # Two identical rows, one wrong: admitting them together fails the budget, so a
+    # permutation of the tie cannot sneak the correct one in alone.
+    assert coverage_at_error([0.8, 0.8], [True, False], 0.05) == 0.0
+    assert coverage_at_error([0.8, 0.8], [False, True], 0.05) == 0.0
