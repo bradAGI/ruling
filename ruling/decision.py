@@ -111,7 +111,7 @@ def pack(state: State, questions: dict[str, Choice | Score | Noul], encode: Call
             positions += range(start, start + len(option))
             segments += [(q, o)] * len(option)
     if len(tokens) > max_tokens:
-        raise InputTooLong(f"request is {len(tokens)} tokens; limit is {max_tokens}")
+        raise InputTooLong(f"request is {len(tokens)} tokens, over the maximum context length of {max_tokens}")
     return Packed(tokens, positions, segments, slots, index)
 
 

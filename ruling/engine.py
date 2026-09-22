@@ -69,7 +69,9 @@ TEMPLATE_KWARGS = {"enable_thinking": False}
 
 
 class InputTooLong(ValueError):
-    pass
+    """Raised with a message that names the maximum context length, the phrase clients
+    such as the Decision Index harness look for to classify a rejection as a capacity
+    limit rather than a failure."""
 
 
 @dataclass(frozen=True)
@@ -267,10 +269,12 @@ class Engine:
         widest = max((p for p in passes), key=lambda p: len(p.tokens), default=None)
         if widest is not None and len(prefix_tokens) + len(widest.tokens) > self.max_branch_tokens:
             raise InputTooLong(f"question {widest.question_id!r} makes a branch of "
-                               f"{len(prefix_tokens) + len(widest.tokens)} tokens; the branch limit is {self.max_branch_tokens}")
+                               f"{len(prefix_tokens) + len(widest.tokens)} tokens, over the maximum context length "
+                               f"of {self.max_branch_tokens} for one branch")
         total = len(prefix_tokens) + sum(len(p.tokens) for p in passes)
         if total > self.max_input_tokens:
-            raise InputTooLong(f"request is {total} tokens; the request limit is {self.max_input_tokens}")
+            raise InputTooLong(f"request is {total} tokens, over the maximum context length of "
+                               f"{self.max_input_tokens} for a whole request")
 
         per_question: dict[str, dict[str, list[float]]] = {qid: {} for qid in questions}
         with self._lock:
