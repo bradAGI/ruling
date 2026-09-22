@@ -172,6 +172,12 @@ day earlier on the same machine, about 10% above this batch. Measured on an
 idle machine; under concurrent load the same requests took two to three times
 longer, because requests queue behind a lock rather than batching together.
 
+![Agreement with TypeSafe's reference against latency for three questions, with Jev's published accuracy marked](../assets/frontier.png)
+
+*What each model costs for what it gets right. Jev's line is its published
+accuracy; its latency is a vendor range, 70 to 500 ms, so it is drawn as a line
+rather than a point.*
+
 ## Against Jev itself
 
 Two public sources carry Jev's own answers on inputs anyone can replay.
