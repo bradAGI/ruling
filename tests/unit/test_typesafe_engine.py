@@ -58,6 +58,15 @@ def test_published_probabilities_round_trip_as_logits_in_canonical_key_order():
     assert response.model == "typesafe:jev-latest" and response.usage.output_tokens == 0
 
 
+def test_a_published_zero_stays_exactly_zero():
+    rounded = json.loads(json.dumps(PUBLISHED))
+    rounded["answers"]["team"]["probabilities"] = {"billing": 1.0, "technical": 0.0, "sales": 0.0}
+    engine = engine_with(lambda request: httpx.Response(200, json=rounded))
+    response = engine.evaluate(SystemOneRequest(state="state", questions=QUESTIONS))
+    assert response.answers["team"].probabilities == {"billing": 1.0, "technical": 0.0, "sales": 0.0}
+    assert response.answers["team"].confidence == 1.0
+
+
 def test_host_errors_surface_with_their_body():
     engine = engine_with(lambda request: httpx.Response(402, text="Payment Required"))
     with pytest.raises(RuntimeError, match="402.*Payment Required"):

@@ -267,7 +267,11 @@ class TypeSafeEngine:
         for qid, question in questions.items():
             keys = option_keys(question)
             distribution = answer_distribution(data["answers"][qid], keys)
-            raw[qid] = RawScore(keys=keys, logits=np.log(np.clip([distribution[k] for k in keys], 1e-12, 1.0)))
+            # Hosts publish rounded probabilities, zeros included; a zero is a -inf logit
+            # downstream, which softmax and the two-stage Choice already handle, so the
+            # host's distribution passes through exactly instead of picking up a floor.
+            with np.errstate(divide="ignore"):
+                raw[qid] = RawScore(keys=keys, logits=np.log(np.array([distribution[k] for k in keys], dtype=np.float64)))
         return Scored(raw=raw, input_tokens=int((data.get("usage") or {}).get("input_tokens") or 0))
 
     def evaluate(self, request: SystemOneRequest) -> SystemOneResponse:
