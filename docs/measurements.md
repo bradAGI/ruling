@@ -201,6 +201,45 @@ longer, because requests queue behind a lock rather than batching together.
 accuracy; its latency is a vendor range, 70 to 500 ms, so it is drawn as a line
 rather than a point.*
 
+
+## JevBench, the public items
+
+[JevBench](https://github.com/fstandhartinger/jevbench) is a third-party
+leaderboard of 534 frozen typed decisions: routing, adequacy judging, policy
+checks, intent, ordinal severity, enum extraction. 231 are public; 303 are held
+out and only the operator runs them. Every system is asked through its own
+published interface and scored by argmax over the exact label set. We ran the
+231 public items through `ruling serve` with the 35B at shipped defaults, one
+request at a time, using the harness's own `typesafe` adapter unchanged; the
+other rows are the operator's published per-task outcomes on the same items.
+
+| system | all 231 | easy 48 | original 72 | hard 111 |
+|---|---:|---:|---:|---:|
+| GPT-5.6 Luna, low reasoning | 0.974 | 1.000 | 0.972 | 0.964 |
+| Gemini 3.1 Flash-Lite | 0.870 | 1.000 | 0.986 | 0.739 |
+| Jev 1.13.0 | 0.866 | 1.000 | 0.986 | 0.730 |
+| **ruling, Qwen3.6-35B-A3B, r=3** | **0.857** | 1.000 | 0.958 | **0.730** |
+| openjev-sglang, Qwen3.6-35B-A3B | 0.853 | 1.000 | 0.944 | 0.730 |
+| SemIf, Qwen3.5-4B | 0.810 | 1.000 | 0.986 | 0.613 |
+| Bespoke Nimble 9B | 0.797 | 1.000 | 0.931 | 0.622 |
+| system-one-open, Gemma 4 E2B | 0.732 | 1.000 | 0.931 | 0.486 |
+
+Two of Jev's 231 decisions separate it from ruling, both on the original 72;
+on the 111 hard items, the long policy texts and multi-step reasoning where
+every open model drops, the two are identical at 81 of 111. The 35B behind
+`openjev-sglang` is the same weights read by a different engine, which puts
+the engine's contribution at about one decision. The ordinary instruction
+model at the top is the operator's own finding, not ours: this suite rewards
+reasoning more than the TypeSafe and Every rows do, and a general model with
+a little reasoning budget is out of reach for any one-pass readout here.
+
+Latency on the 231 items, one request at a time on one Mac: p50 0.17 s, p95
+1.10 s. Calibration by tier, from the harness: easy ECE 0.000, original 0.044,
+hard 0.159 with a Brier of 0.431, so the hard items are where the probabilities
+overstate themselves as well as where the answers are wrong. Everything the
+harness wrote, per-decision outcomes and raw responses included, is
+reproducible with the commands in its README against a local `ruling serve`.
+
 ## Against Jev itself
 
 Two public sources carry Jev's own answers on inputs anyone can replay.

@@ -171,6 +171,11 @@ setting and the commands for each cell.
 | Qwen3.6-35B-A3B | 0.873 | 0.958 | 0.954 | 0.922 |
 | Jev, published | 0.882 | — | — | 0.961 |
 
+On [JevBench](https://github.com/fstandhartinger/jevbench)'s 231 public
+decisions, run through the harness's own adapter: ruling with the 35B 0.857,
+Jev 0.866, and the two identical on the 111 hard items. Full table in
+[docs/measurements.md](docs/measurements.md#jevbench-the-public-items).
+
 Coverage at a 5% error budget, the number a threshold depends on:
 
 | | TypeSafe 102 | Every 154 | authored144 | perturbations108 |
