@@ -219,6 +219,7 @@ other rows are the operator's published per-task outcomes on the same items.
 | Gemini 3.1 Flash-Lite | 0.870 | 1.000 | 0.986 | 0.739 |
 | Jev 1.13.0 | 0.866 | 1.000 | 0.986 | 0.730 |
 | **ruling, Qwen3.6-35B-A3B, r=3** | **0.857** | 1.000 | 0.958 | **0.730** |
+| Clef-flash 9B, 4-bit MLX port, local | 0.792 | 1.000 | 0.944 | 0.604 |
 | openjev-sglang, Qwen3.6-35B-A3B | 0.853 | 1.000 | 0.944 | 0.730 |
 | SemIf, Qwen3.5-4B | 0.810 | 1.000 | 0.986 | 0.613 |
 | Bespoke Nimble 9B | 0.797 | 1.000 | 0.931 | 0.622 |
@@ -232,6 +233,11 @@ the engine's contribution at about one decision. The ordinary instruction
 model at the top is the operator's own finding, not ours: this suite rewards
 reasoning more than the TypeSafe and Every rows do, and a general model with
 a little reasoning budget is out of reach for any one-pass readout here.
+
+Clef-flash was run the same way, against the community MLX port's own
+`/v1/systemone` server, unmodified. It is level with Jev on TypeSafe's and
+Every's rows but drops on the hard tier: 67 of 111, against 81 for both Jev
+and the 35B.
 
 Latency on the 231 items, one request at a time on one Mac: p50 0.17 s, p95
 1.10 s. Calibration by tier, from the harness: easy ECE 0.000, original 0.044,
