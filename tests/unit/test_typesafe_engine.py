@@ -67,6 +67,15 @@ def test_a_published_zero_stays_exactly_zero():
     assert response.answers["team"].confidence == 1.0
 
 
+def test_a_hosts_context_limit_is_a_capacity_rejection_not_a_failure():
+    from ruling.engine import InputTooLong
+
+    engine = engine_with(lambda request: httpx.Response(
+        413, json={"error": {"message": "maximum context length exceeded: request needs 20141 tokens; maximum is 16384"}}))
+    with pytest.raises(InputTooLong, match="maximum context length"):
+        engine.score("state", QUESTIONS)
+
+
 def test_host_errors_surface_with_their_body():
     engine = engine_with(lambda request: httpx.Response(402, text="Payment Required"))
     with pytest.raises(RuntimeError, match="402.*Payment Required"):

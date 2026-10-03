@@ -23,7 +23,7 @@ import httpx
 import numpy as np
 
 from ruling.calibration import Calibration, Provenance
-from ruling.engine import RawScore, Scored, answer
+from ruling.engine import InputTooLong, RawScore, Scored, answer
 from ruling.prompt import SYSTEM_PROMPT, render_question, render_state
 from ruling.evals import answer_distribution
 from ruling.questions import MAX_CHOICE_OPTIONS, Choice, Noul, Score, State, SystemOneRequest, SystemOneResponse, Usage, option_keys
@@ -260,6 +260,10 @@ class TypeSafeEngine:
         if self.remote:
             body["model"] = self.remote
         response = self._client.post("/v1/systemone", json=body)
+        if response.status_code == 413:
+            # The host's own context limit; surfacing it as InputTooLong keeps ruling's 413, not a 500.
+            raise InputTooLong(f"{self.model_id} refused the request, over the maximum context length: "
+                               f"{response.text[:300]}")
         if response.status_code != 200:
             raise RuntimeError(f"{self.model_id} returned {response.status_code}: {response.text[:500]}")
         data = response.json()
