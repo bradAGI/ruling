@@ -14,6 +14,19 @@ loss is cross-entropy between the model's distribution over the allowed answer
 letters and the target distribution, which is a proper scoring rule, so its
 minimum is the true probability. Targets are soft where annotator fractions or
 designed ambiguity exist (a `target` reference) and one-hot otherwise.
+
+Three optional terms move the objective toward the calibrated-decision recipes
+TypeSafe and Cloudflare describe, all off by default:
+
+- label smoothing mixes a little of the uniform distribution into the target,
+  so the model is never trained to put all its mass on one option;
+- a Brier term, the squared distance between the predicted and target
+  distributions, which punishes confident errors less steeply than log loss
+  and so pulls the hard, wrong answers back toward the middle;
+- a confidence-ranking term, which within each batch penalizes any wrong
+  answer reported more confidently than a right one. This targets the
+  ordering of confidences, which is what coverage at a fixed error budget
+  measures and what a temperature cannot change.
 """
 
 from __future__ import annotations
@@ -33,7 +46,7 @@ from mlx.utils import tree_flatten
 from mlx_lm.tuner.trainer import grad_checkpoint
 from mlx_lm.tuner.utils import linear_to_lora_layers
 
-from ruling.calibration import Calibration, expected_calibration_error
+from ruling.calibration import Calibration, coverage_at_error, expected_calibration_error
 from ruling.engine import Engine, option_logits
 from ruling.evals import Record, label_index, load_dataset
 from ruling.prompt import render_question
@@ -63,6 +76,10 @@ class TrainConfig:
     valid_examples: int = 1500
     grad_checkpoint: bool = True
     seed: int = 0
+    label_smoothing: float = 0.0
+    brier_weight: float = 0.0
+    ranking_weight: float = 0.0
+    ranking_margin: float = 0.05
 
 
 @dataclass(frozen=True)
@@ -90,6 +107,30 @@ def permuted(question: Choice | Score | Noul, rng: np.random.Generator) -> tuple
         order = list(rng.permutation(list(question.criteria)))
         return Choice(instructions=question.instructions, criteria={k: question.criteria[k] for k in order}), 0
     return question, int(rng.integers(2))
+
+
+def objective(log_probs: mx.array, mask: mx.array, targets: mx.array, label_smoothing: float = 0.0,
+              brier_weight: float = 0.0, ranking_weight: float = 0.0, ranking_margin: float = 0.05) -> mx.array:
+    """Cross-entropy against the (optionally smoothed) target, plus the optional Brier and ranking terms.
+
+    With every weight at zero this is exactly the original soft-target cross-entropy.
+    """
+    options = mask.sum(axis=-1, keepdims=True).astype(mx.float32)
+    smoothed = (1.0 - label_smoothing) * targets + mx.where(mask, label_smoothing / options, 0.0)
+    total = -mx.where(mask, smoothed * log_probs, 0.0).sum(axis=-1).mean()
+    if brier_weight == 0.0 and ranking_weight == 0.0:
+        return total
+    probs = mx.where(mask, mx.exp(log_probs), 0.0)
+    if brier_weight:
+        total = total + brier_weight * ((probs - targets) ** 2).sum(axis=-1).mean()
+    if ranking_weight:
+        confidence = probs.max(axis=-1)
+        right = mx.stop_gradient((probs.argmax(axis=-1) == targets.argmax(axis=-1)).astype(mx.float32))
+        # pairs[i, j] is 1 where answer i was right and answer j was wrong.
+        pairs = right[:, None] * (1.0 - right)[None, :]
+        violations = mx.maximum(confidence[None, :] - confidence[:, None] + ranking_margin, 0.0) * pairs
+        total = total + ranking_weight * violations.sum() / mx.maximum(pairs.sum(), 1.0)
+    return total
 
 
 def split_records(records: list[Record], valid_fraction: float) -> tuple[list[Record], list[Record]]:
@@ -175,10 +216,11 @@ class Trainer:
         logits = mx.where(mask, option_logits(model, tokens, None, last, ids), -mx.inf)
         return logits - mx.logsumexp(logits, axis=-1, keepdims=True)
 
-    @classmethod
-    def loss(cls, model, tokens, last, ids, mask, targets):
-        log_probs = cls._log_probs(model, tokens, last, ids, mask)
-        return -mx.where(mask, targets * log_probs, 0.0).sum(axis=-1).mean()
+    def loss(self, model, tokens, last, ids, mask, targets):
+        log_probs = self._log_probs(model, tokens, last, ids, mask)
+        config = self.config
+        return objective(log_probs, mask, targets, config.label_smoothing, config.brier_weight,
+                         config.ranking_weight, config.ranking_margin)
 
     def _batches(self):
         """Endless shuffled batches, grouped by length to limit padding."""
@@ -213,7 +255,8 @@ class Trainer:
                 correct.append(int(row.argmax()) == int(np.argmax(target)))
         model.train()
         return {"loss": float(np.mean(losses)), "accuracy": float(np.mean(correct)),
-                "expected_calibration_error": expected_calibration_error(top, correct), "count": len(losses)}
+                "expected_calibration_error": expected_calibration_error(top, correct),
+                "coverage_at_5pct_error": coverage_at_error(top, correct, 0.05), "count": len(losses)}
 
     def save(self, directory: Path, history: list[dict]) -> None:
         directory.mkdir(parents=True, exist_ok=True)

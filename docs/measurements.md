@@ -154,6 +154,30 @@ SST-5 is a five-way ordinal task where fine-tuned encoders reach about 0.59.
 Zero-shot, from a 4-bit 4B model, 0.53 with an ECE under 0.1 is usable.
 
 
+
+### Tried: calibration terms in the training objective
+
+`ruling train` accepts three optional terms, all off by default:
+`--label-smoothing`, `--brier-weight`, and `--ranking-weight`, which penalizes a
+wrong answer reported more confidently than a right one in the same batch. The
+v2 adapter was trained exactly like v1 (same data, holdouts, seed and steps)
+with smoothing 0.05, Brier weight 1.0 and ranking weight 1.0, then scored on
+the same four held-out sets.
+
+| pooled, 508 judgments, three orderings | accuracy | coverage at 5% error | confidently wrong (p >= 0.9) | five most confident wrong answers |
+|---|---:|---:|---:|---|
+| v1 adapter, log loss only | 0.882 | 0.813 | 3.3% | 0.999, 0.999, 0.998, 0.997, 0.994 |
+| v2 adapter, with the three terms | 0.884 | 0.831 | 2.8% | 0.980, 0.978, 0.972, 0.971, 0.967 |
+| Clef-flash, for reference | 0.927 | 0.949 | 1.2% | 0.919, 0.919, 0.918, 0.916, 0.906 |
+
+The terms did what they are built to do, in the right direction and by a
+small amount: accuracy unchanged, fewer confident errors, and the worst
+mistakes no longer reported at 0.999. Set by set the effect is not consistent;
+coverage on TypeSafe's 102 rows fell from 0.392 to 0.069, because coverage on a
+small set turns on where a handful of confident errors land. Clef-flash's lead
+is far larger than anything the loss moved, which points at its trained head
+and data rather than its objective. The terms stay available and off.
+
 ### Tried and rejected: one-pass Choice above 62 options
 
 The letter readout has 62 single-token codes, so a Choice with more options
