@@ -183,6 +183,9 @@ class Engine:
         self.prior_debias = prior_debias
         self.adapter = adapter_digest(adapter)
         self.model, self.tokenizer = load(model_id, adapter_path=str(adapter) if adapter else None)
+        # Adapter weights come back lazy, and a request thread has no CPU stream to realize them
+        # on; settle every parameter here, on the thread that loaded the model.
+        mx.eval(self.model.parameters())
         self.revision = model_revision(model_id)
         self.codes = AnswerCodes.from_tokenizer(self.tokenizer)
         self._pad_id = self.tokenizer.pad_token_id
