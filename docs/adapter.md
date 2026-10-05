@@ -52,6 +52,13 @@ uv run ruling train \
 About 40 minutes on an Apple Silicon Mac. The trainer refuses to start if any
 training state also appears in a `--holdout` file.
 
+The trainer also takes three optional calibration terms, off by default and
+not used for this adapter: `--label-smoothing`, `--brier-weight` and
+`--ranking-weight`. An adapter trained with all three (0.05, 1.0, 1.0) kept
+accuracy and cut confident errors from 3.3% to 2.8% over the held-out sets, a
+small and uneven gain; see
+[the measurement](measurements.md#tried-calibration-terms-in-the-training-objective).
+
 ## How to use it
 
 ```bash
