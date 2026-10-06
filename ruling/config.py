@@ -25,7 +25,12 @@ def configure_memory(settings: "Settings") -> None:
     was loaded alongside it. The memory limit makes MLX evaluate in smaller
     pieces and raise if a job cannot fit; the cache limit returns freed buffers.
     """
-    physical = mx.device_info()["memory_size"]
+    info = mx.device_info()
+    if "memory_size" not in info:
+        # The CPU backend on Linux reports no unified memory, and with an
+        # OpenAI-backend model MLX holds no weights here: nothing to budget.
+        return
+    physical = info["memory_size"]
     mx.set_memory_limit(int(physical * settings.memory_fraction))
     mx.set_cache_limit(int(settings.cache_limit_gb * 2**30))
 
