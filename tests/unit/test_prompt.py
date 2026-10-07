@@ -41,3 +41,22 @@ def test_structured_instructions_and_descriptions_render_as_json():
 def test_noul_rotation_swaps_yes_no():
     question = Noul(instructions="q")
     assert render_question(question, CODES, rotation=1).keys == ["no", "yes"]
+
+
+def test_hosted_message_puts_the_stable_question_before_the_state():
+    """A host that caches prompt prefixes must see the parts that repeat first:
+    the question and its options, then the state, then the answer cue."""
+    import os
+    from ruling.prompt import hosted_user_message, render_question
+    from ruling.questions import Choice
+
+    question = Choice(instructions="Which type is the name?", criteria={"ORG": "a company", "PERSON": "a person"})
+    rendered = render_question(question, ["A", "B"], 0)
+    a = hosted_user_message({"name": "OpenAI"}, rendered)
+    b = hosted_user_message({"name": "Meta"}, rendered)
+    shared = os.path.commonprefix([a, b])
+    assert rendered.question in shared and rendered.options in shared
+    assert a.index('"OpenAI"') > a.index(rendered.options)
+    assert a.endswith(rendered.closing)
+    # The local engine's layout, state then question, is untouched.
+    assert rendered.text == f"{rendered.question}\n{rendered.options}\n{rendered.closing}"

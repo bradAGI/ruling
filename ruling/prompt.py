@@ -34,6 +34,10 @@ class RenderedQuestion:
     text: str
     keys: list[str]
     codes: list[str]
+    # The parts of `text`, for a layout that orders them differently.
+    question: str = ""
+    options: str = ""
+    closing: str = ""
 
 
 def render_state(state: State) -> str:
@@ -74,8 +78,25 @@ def render_question(question: Choice | Score | Noul, codes: list[str], rotation:
         heading = "Is the statement true?"
         closing = "Respond with only the letter."
     used = codes[: len(keys)]
-    text = "\n".join([f"Question: {instructions}", heading, *lines, closing])
-    return RenderedQuestion(text=text, keys=keys, codes=used)
+    question = f"Question: {instructions}"
+    options = "\n".join([heading, *lines])
+    text = "\n".join([question, options, closing])
+    return RenderedQuestion(text=text, keys=keys, codes=used, question=question, options=options, closing=closing)
+
+
+def hosted_user_message(state: State, rendered: RenderedQuestion) -> str:
+    """The user turn for an OpenAI-compatible host: question and options first,
+    the state after them, the answer cue last.
+
+    Such a host caches the prompt prefix it has already processed and reuses
+    it for the next request that starts the same way. Across calls the
+    question and its options repeat and the state changes, so with the state
+    first nothing after it is reused and every call pays for the whole prompt:
+    on a CPU host at 36 tokens a second, 18 s against 1 s. The local engine
+    keeps the state first, since it encodes the state once and scores every
+    question against it.
+    """
+    return f"{rendered.question}\n{rendered.options}\n\n{render_state(state)}{rendered.closing}"
 
 
 def prior_question(cardinality: int) -> Choice:

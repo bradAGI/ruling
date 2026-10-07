@@ -24,7 +24,7 @@ import numpy as np
 
 from ruling.calibration import Calibration, Provenance
 from ruling.engine import InputTooLong, RawScore, Scored, answer
-from ruling.prompt import SYSTEM_PROMPT, render_question, render_state
+from ruling.prompt import SYSTEM_PROMPT, hosted_user_message, render_question
 from ruling.evals import answer_distribution
 from ruling.questions import MAX_CHOICE_OPTIONS, Choice, Noul, Score, State, SystemOneRequest, SystemOneResponse, Usage, option_keys
 
@@ -179,7 +179,7 @@ class HostedEngine:
     def _ask(self, state: State, question: Choice | Score | Noul, rotation: int) -> tuple[list[str], list[float], int]:
         rendered = render_question(question, LETTERS, rotation)
         messages = [{"role": "system", "content": SYSTEM_PROMPT},
-                    {"role": "user", "content": render_state(state) + rendered.text}]
+                    {"role": "user", "content": hosted_user_message(state, rendered)}]
         for _ in range(MISSING_LOGPROB_ATTEMPTS):
             data = self.complete(messages, max_tokens=1, logprobs=True)
             top = first_token_top_logprobs(data)
