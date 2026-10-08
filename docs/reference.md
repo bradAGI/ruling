@@ -30,6 +30,7 @@ The first start downloads the default model, `mlx-community/Qwen3.5-4B-4bit`
 | `RULING_ADAPTER` | unset | A LoRA directory from `ruling train`; see [docs/adapter.md](adapter.md) |
 | `RULING_CASCADE_TO` | unset | The secondary model, in the same syntax as `RULING_MODEL`; it answers only the questions the primary is unsure about |
 | `RULING_CASCADE_THRESHOLD` | unset | Top probability below which a question is escalated; required with `RULING_CASCADE_TO` |
+| `RULING_FAILOVER_TO` | unset | A model that answers the whole request whenever the primary is unavailable (429, 502–504, or a timeout); the response's `model` names whichever answered |
 | `RULING_HOST`, `RULING_PORT` | `127.0.0.1`, `8010` | Bind address |
 
 ### Bring your own model

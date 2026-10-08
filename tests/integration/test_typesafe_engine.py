@@ -6,7 +6,7 @@ import pytest
 from ruling.calibration import Calibration, softmax
 from ruling.cascade import CascadeEngine
 from ruling.hosted import TYPESAFE_PREFIX, TypeSafeEngine
-from ruling.questions import Choice, Noul, Score
+from ruling.questions import Choice, Noul, Score, SystemOneRequest
 
 pytestmark = pytest.mark.integration
 
@@ -38,3 +38,26 @@ def test_a_hosted_model_can_be_the_second_stage_of_a_cascade(live_server_with_ke
     for qid in QUESTIONS:
         np.testing.assert_allclose(softmax(everything_escalates.raw[qid].logits),
                                    softmax(hosted_alone.raw[qid].logits), atol=1e-6)
+
+
+def dead_host():
+    """A System One engine pointed at a port nothing listens on."""
+    return TypeSafeEngine(TYPESAFE_PREFIX, Calibration(), "http://127.0.0.1:9", None,
+                          max_input_tokens=65_536, max_branch_tokens=32_768)
+
+
+def test_a_cascade_survives_its_hosted_second_stage_being_down(single_engine):
+    alone = single_engine.score(STATE, QUESTIONS)
+    survived = CascadeEngine(single_engine, dead_host(), threshold=1.0).score(STATE, QUESTIONS)
+    for qid in QUESTIONS:
+        np.testing.assert_allclose(softmax(survived.raw[qid].logits), softmax(alone.raw[qid].logits), atol=1e-6)
+    assert survived.input_tokens == alone.input_tokens
+
+
+def test_a_local_model_takes_over_from_an_unreachable_host(single_engine):
+    from ruling.failover import FailoverEngine
+
+    response = FailoverEngine(dead_host(), single_engine).evaluate(
+        SystemOneRequest(state=STATE, questions=QUESTIONS))
+    assert response.model == single_engine.model_id
+    assert response.answers["color"].choice == "blue"

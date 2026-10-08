@@ -8,17 +8,25 @@ ran on about 13% of questions and the pair matched its accuracy alone.
 
 Each engine's own temperature is applied here, so the logits handed back are
 already calibrated and the cascade carries an identity calibration of its own.
+
+When the second engine is a host that is overloaded or unreachable, the first
+engine's answers stand for the questions that would have been escalated: the
+request degrades to the primary's own confidence instead of failing.
 """
 
 from __future__ import annotations
+
+import logging
 
 import numpy as np
 
 from ruling.calibration import Calibration, Provenance, softmax
 from ruling.engine import RawScore, Scored, answer
+from ruling.hosted import HostUnavailable
 from ruling.questions import Choice, Noul, Score, State, SystemOneRequest, SystemOneResponse, Usage
 
 PREFIX = "cascade:"
+log = logging.getLogger("ruling")
 
 
 class CascadeEngine:
@@ -49,7 +57,11 @@ class CascadeEngine:
         doubtful = {qid: q for qid, q in questions.items() if softmax(raw[qid].logits).max() < self.threshold}
         tokens = first.input_tokens
         if doubtful:
-            second = self.second.score(state, doubtful)
+            try:
+                second = self.second.score(state, doubtful)
+            except HostUnavailable as exc:
+                log.warning("cascade kept %s's answers for %d doubtful questions: %s", self.first.model_id, len(doubtful), exc)
+                return Scored(raw=raw, input_tokens=tokens)
             tokens += second.input_tokens
             for qid, q in doubtful.items():
                 raw[qid] = self._tempered(self.second, q, second.raw[qid])

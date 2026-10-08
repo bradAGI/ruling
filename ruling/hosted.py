@@ -41,6 +41,25 @@ it, so the limit is reported as `max_options` rather than discovered at run time
 """
 
 
+class HostUnavailable(RuntimeError):
+    """The host is up but not answering right now: overloaded, rate limited, or timing out.
+
+    Distinct from a refusal or a bug so a wrapper can fall back to another engine
+    instead of failing the request.
+    """
+
+
+UNAVAILABLE_STATUSES = (429, 502, 503, 504)
+
+
+def unavailable_or_error(model_id: str, response: httpx.Response) -> RuntimeError:
+    """The exception for a non-200 host response."""
+    text = response.text[:500]
+    if response.status_code in UNAVAILABLE_STATUSES:
+        return HostUnavailable(f"{model_id} is unavailable, returned {response.status_code}: {text}")
+    return RuntimeError(f"{model_id} returned {response.status_code}: {text}")
+
+
 class BudgetExceeded(RuntimeError):
     pass
 
@@ -147,9 +166,12 @@ class HostedEngine:
         body = self.body(messages, max_tokens)
         if logprobs:
             body |= {"logprobs": True, "top_logprobs": self.top_logprobs}
-        response = self._client.post(f"{self.base_url}/chat/completions", json=body)
+        try:
+            response = self._client.post(f"{self.base_url}/chat/completions", json=body)
+        except httpx.TransportError as exc:
+            raise HostUnavailable(f"{self.model_id} is unreachable at {self.base_url}: {exc}") from exc
         if response.status_code != 200:
-            raise RuntimeError(f"{self.base_url} returned {response.status_code} for {self.remote}: {response.text[:500]}")
+            raise unavailable_or_error(f"{self.base_url} ({self.remote})", response)
         data = response.json()
         self.charge(data)
         return data
@@ -259,13 +281,16 @@ class TypeSafeEngine:
         body = {"state": state, "questions": {qid: q.model_dump(exclude_none=True) for qid, q in questions.items()}}
         if self.remote:
             body["model"] = self.remote
-        response = self._client.post("/v1/systemone", json=body)
+        try:
+            response = self._client.post("/v1/systemone", json=body)
+        except httpx.TransportError as exc:
+            raise HostUnavailable(f"{self.model_id} is unreachable: {exc}") from exc
         if response.status_code == 413:
             # The host's own context limit; surfacing it as InputTooLong keeps ruling's 413, not a 500.
             raise InputTooLong(f"{self.model_id} refused the request, over the maximum context length: "
                                f"{response.text[:300]}")
         if response.status_code != 200:
-            raise RuntimeError(f"{self.model_id} returned {response.status_code}: {response.text[:500]}")
+            raise unavailable_or_error(self.model_id, response)
         data = response.json()
         raw = {}
         for qid, question in questions.items():

@@ -159,6 +159,12 @@ the secondary answered 13% of questions and the pair matched the secondary
 alone (90 vs 91 on TypeSafe's rows, 145 vs 144 on Every's). Set the secondary
 to `typesafe:jev-latest` and the same arithmetic applies to your Jev bill.
 
+Both directions survive an outage. If the secondary is a host that returns
+503 or times out, the primary's answers stand for the questions it would have
+escalated. For the reverse, Jev first and a local model only when Jev is down,
+set `RULING_MODEL=typesafe:jev-latest` and `RULING_FAILOVER_TO=<local model>`;
+the response's `model` says which one answered.
+
 ## How good is it
 
 One Mac, the same four held-out sets for every model. Our models at the

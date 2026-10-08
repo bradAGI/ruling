@@ -16,11 +16,12 @@ from dataclasses import replace
 
 from ruling.calibration import Calibration
 from ruling.cascade import CascadeEngine
+from ruling.failover import FailoverEngine
 from ruling.config import Settings
 from ruling.decision import DecisionEngine, is_checkpoint
 from ruling.engine import Engine, InputTooLong, model_released
 from ruling.against import API_KEY_ENV, BASE_URL_ENV, DEFAULT_BASE_URL
-from ruling.hosted import HOSTED_PREFIX, OPENROUTER_PREFIX, TYPESAFE_PREFIX, Budget, HostedEngine, OpenRouterEngine, TypeSafeEngine
+from ruling.hosted import HOSTED_PREFIX, OPENROUTER_PREFIX, TYPESAFE_PREFIX, Budget, HostedEngine, HostUnavailable, OpenRouterEngine, TypeSafeEngine
 from ruling.questions import DEFAULT_MODEL_ALIASES, ModelInfo, ModelList, SystemOneRequest, SystemOneResponse
 
 log = logging.getLogger("ruling")
@@ -31,8 +32,14 @@ def build_engine(settings: Settings):
     """Any OpenAI-compatible host, OpenRouter, a trained decision checkpoint, or a local decoder.
 
     With `cascade_to` set, that model answers whichever questions the first one is
-    unsure about, judged against `cascade_threshold`.
+    unsure about, judged against `cascade_threshold`. With `failover_to` set, that
+    model answers whenever the first one is unavailable.
     """
+    if settings.failover_to:
+        primary = build_engine(replace(settings, failover_to=None))
+        fallback = build_engine(replace(settings, model=settings.failover_to, failover_to=None, cascade_to=None,
+                                        adapter_path=None, calibration_path=None))
+        return FailoverEngine(primary, fallback)
     if settings.cascade_to:
         if settings.cascade_threshold is None:
             raise ValueError("set RULING_CASCADE_THRESHOLD, the top probability below which a question is escalated")
@@ -82,6 +89,8 @@ def create_app(engine: Engine | DecisionEngine, api_key: str | None = None) -> F
             raise HTTPException(413, str(exc)) from exc
         except ValueError as exc:
             raise HTTPException(400, str(exc)) from exc
+        except HostUnavailable as exc:
+            raise HTTPException(503, str(exc)) from exc
         log.info("systemone questions=%d input_tokens=%d ms=%.0f",
                  len(request.questions), response.usage.input_tokens, (time.perf_counter() - started) * 1000)
         return response
