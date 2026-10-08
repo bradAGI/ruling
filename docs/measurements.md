@@ -155,6 +155,31 @@ Zero-shot, from a 4-bit 4B model, 0.53 with an ECE under 0.1 is usable.
 
 
 
+
+### Hosted prompt layout: question before the state
+
+For `openai:` and `openrouter:` hosts the user turn now puts the question and
+its options before the state, so a host that caches prompt prefixes can reuse
+the part that repeats. Measured on a CPU host at 36 tokens a second, that cut
+a call over a new state from 18 s to 1 s. The local MLX engine's layout is
+unchanged.
+
+Whether the model answers differently in that layout, checked with the
+default 4B behind `mlx_lm.server` on Every's rows, one ordering, one
+connection:
+
+| layout | labeled accuracy | ECE | coverage at 5% error | top answer changed |
+|---|---:|---:|---:|---:|
+| state first (before) | 141 / 154 | 0.057 | 0.779 | |
+| question first (after) | 140 / 154 | 0.060 | 0.695 | 129 of 758 questions |
+
+Accuracy is unchanged (McNemar p = 1.00, two questions each way). The
+distributions are not: the top answer moves on 17% of questions and the top
+probability by 0.118 on average, enough to change coverage on a set this
+small. A calibration fitted for a hosted model before this change does not
+describe it after, and the layout is not part of the calibration's
+provenance, so refit any hosted calibration rather than carrying it over.
+
 ### Tried: calibration terms in the training objective
 
 `ruling train` accepts three optional terms, all off by default:
