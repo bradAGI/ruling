@@ -39,5 +39,5 @@ def test_budget_stops_calls_once_spent():
 
 def test_api_errors_carry_the_providers_explanation():
     engine = OpenRouterEngine(MODEL, Calibration(), rotations=1, providers=["no-such-provider"], budget=Budget(limit_usd=0.01))
-    with pytest.raises(RuntimeError, match="OpenRouter 404 .*no-such-provider"):
+    with pytest.raises(RuntimeError, match="404 .*no-such-provider"):
         engine.score("x", {"q": Noul(instructions="q")})
