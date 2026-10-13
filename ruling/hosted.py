@@ -26,7 +26,8 @@ from ruling.calibration import Calibration, Provenance
 from ruling.engine import InputTooLong, RawScore, Scored, answer
 from ruling.prompt import SYSTEM_PROMPT, hosted_user_message, render_question
 from ruling.evals import answer_distribution
-from ruling.questions import MAX_CHOICE_OPTIONS, Choice, Noul, Score, State, SystemOneRequest, SystemOneResponse, Usage, option_keys
+from ruling.questions import (MAX_CHOICE_OPTIONS, Choice, InvalidOptions, Noul, Score, State, SystemOneRequest,
+                              SystemOneResponse, Usage, option_keys)
 
 OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 OPENROUTER_PREFIX = "openrouter:"
@@ -190,7 +191,7 @@ class HostedEngine:
     def score(self, state: State, questions: dict[str, Choice | Score | Noul]) -> Scored:
         for qid, question in questions.items():
             if len(option_keys(question)) > self.max_options:
-                raise ValueError(f"question {qid!r} has more than {self.max_options} options")
+                raise InvalidOptions(qid, f"a choice needs 2 to {self.max_options} options here, got {len(option_keys(question))}")
         jobs = [(qid, rotation) for qid, question in questions.items()
                 for rotation in range(2 if isinstance(question, Score) else len(option_keys(question)))
                 if rotation < self.rotations]
@@ -245,6 +246,25 @@ class OpenRouterEngine(HostedEngine):
 TYPESAFE_PREFIX = "typesafe:"
 
 
+def _error_of(response: httpx.Response) -> dict:
+    """The `error` object of a hosted-shape error body, or an empty dict for any other body."""
+    try:
+        error = response.json().get("error")
+    except ValueError:
+        return {}
+    return error if isinstance(error, dict) else {}
+
+
+def _is_context_rejection(response: httpx.Response) -> bool:
+    """A host that limits context per question says 422 `context_too_long` rather than 413."""
+    return response.status_code == 422 and _error_of(response).get("code") == "context_too_long"
+
+
+def _question_at_fault(response: httpx.Response) -> str | None:
+    param = _error_of(response).get("param")
+    return param.removeprefix("questions.") if isinstance(param, str) and param.startswith("questions.") else None
+
+
 class TypeSafeEngine:
     """TypeSafe's hosted API, or any server that speaks its protocol, as an engine.
 
@@ -285,7 +305,8 @@ class TypeSafeEngine:
     def score(self, state: State, questions: dict[str, Choice | Score | Noul]) -> Scored:
         for qid, question in questions.items():
             if len(option_keys(question)) > self.max_options:
-                raise ValueError(f"question {qid!r} has {len(option_keys(question))} options; {self.model_id} takes at most {self.max_options}")
+                raise InvalidOptions(qid, f"a choice needs 2 to {self.max_options} options on {self.model_id}, "
+                                          f"got {len(option_keys(question))}")
         body = {"state": state, "questions": {qid: q.model_dump(exclude_none=True) for qid, q in questions.items()}}
         if self.remote:
             body["model"] = self.remote
@@ -293,10 +314,11 @@ class TypeSafeEngine:
             response = self._client.post("/v1/systemone", json=body)
         except httpx.TransportError as exc:
             raise HostUnavailable(f"{self.model_id} is unreachable: {exc}") from exc
-        if response.status_code == 413:
-            # The host's own context limit; surfacing it as InputTooLong keeps ruling's 413, not a 500.
+        if response.status_code == 413 or _is_context_rejection(response):
+            # The host's own context limit; surfacing it as InputTooLong keeps it a capacity
+            # rejection here too, not a 500.
             raise InputTooLong(f"{self.model_id} refused the request, over the maximum context length: "
-                               f"{response.text[:300]}")
+                               f"{response.text[:300]}", question_id=_question_at_fault(response))
         if response.status_code != 200:
             raise self.refusal(response)
         data = response.json()

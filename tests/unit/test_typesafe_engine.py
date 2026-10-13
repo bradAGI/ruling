@@ -88,3 +88,21 @@ def test_an_answer_missing_an_option_is_an_error_not_a_guess():
     engine = engine_with(lambda request: httpx.Response(200, json=broken))
     with pytest.raises(ValueError, match="lacks options"):
         engine.score("state", QUESTIONS)
+
+
+def test_a_hosts_per_question_context_limit_is_a_capacity_rejection_too():
+    """A newer host says 422 context_too_long for one question instead of 413 for the request."""
+    from ruling.engine import InputTooLong
+
+    engine = engine_with(lambda request: httpx.Response(
+        422, json={"error": {"code": "context_too_long", "param": "questions.team",
+                             "message": "questions.team renders to 20141 tokens; the limit is 16384 per question."}}))
+    with pytest.raises(InputTooLong, match="maximum context length") as caught:
+        engine.score("state", QUESTIONS)
+    assert caught.value.question_id == "team"
+
+
+def test_other_422s_from_a_host_are_refusals_not_capacity():
+    engine = engine_with(lambda request: httpx.Response(422, json={"error": {"code": "invalid_input", "message": "x"}}))
+    with pytest.raises(RuntimeError):
+        engine.score("state", QUESTIONS)

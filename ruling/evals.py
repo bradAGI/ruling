@@ -39,7 +39,7 @@ from ruling.calibration import (
 )
 from ruling.engine import InputTooLong
 from ruling.metrics import decision_metrics
-from ruling.questions import Choice, Noul, Question, Score, State, option_keys
+from ruling.questions import MAX_CHOICE_OPTIONS, Choice, Noul, Question, Score, State, check_askable, option_keys
 
 Distribution = dict[str, float]
 Label = str | int | bool | float | list[float] | dict[str, float]
@@ -73,6 +73,7 @@ class Record(BaseModel):
 
     @model_validator(mode="after")
     def labels_and_references_match_questions(self) -> "Record":
+        check_askable(self.questions, MAX_CHOICE_OPTIONS)
         unknown = (set(self.labels) | set(self.references)) - set(self.questions)
         if unknown:
             raise ValueError(f"labels or references for unknown questions {sorted(unknown)}")

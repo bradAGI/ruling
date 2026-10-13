@@ -27,16 +27,17 @@ from ruling.calibration import Calibration, Provenance
 from ruling.engine import InputTooLong, RawScore, Scored, answer
 from ruling.modernbert import Config, Layer, MaskedLM, load
 from ruling.questions import (
-    MAX_CHOICE_OPTIONS,
     Choice,
+    MAX_CHOICE_OPTIONS,
     Noul,
+    option_keys,
+    question_statement,
+    render_text,
     Score,
     State,
     SystemOneRequest,
     SystemOneResponse,
     Usage,
-    option_keys,
-    render_text,
 )
 
 CHECKPOINT_FILE = "decision.json"
@@ -64,7 +65,7 @@ class Packed:
 
 
 def question_text(question: Choice | Score | Noul) -> str:
-    instructions = render_text(question.instructions)
+    instructions = question_statement(question)
     if isinstance(question, Choice):
         return f"Choose the best option. {instructions}"
     if isinstance(question, Score):

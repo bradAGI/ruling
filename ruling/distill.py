@@ -22,7 +22,7 @@ from pydantic import TypeAdapter, ValidationError
 from ruling.calibration import softmax
 from ruling.engine import TEMPLATE_KWARGS, Engine, InputTooLong
 from ruling.evals import Record
-from ruling.questions import Choice, Question, State
+from ruling.questions import InvalidOptions, Question, State, check_askable
 
 WRITER_SYSTEM = ("You design evaluation questions for software that makes fast judgments about documents. "
                  "Reply with one JSON object and nothing else.")
@@ -67,9 +67,8 @@ def parse_questions(text: str, max_options: int) -> dict:
     for qid, spec in candidates.items():
         try:
             question = QUESTION.validate_python(spec)
-        except ValidationError:
-            continue
-        if isinstance(question, Choice) and len(question.criteria) > max_options:
+            check_askable({str(qid): question}, max_options)
+        except (ValidationError, InvalidOptions):
             continue
         questions[str(qid)] = question
     return questions

@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from typing import Annotated, Any, Literal, Union
 
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 State = Union[str, dict[str, Any], list[Any]]
 
@@ -13,9 +13,12 @@ State = Union[str, dict[str, Any], list[Any]]
 # JSON structure; structure is rendered compactly into the prompt.
 Text = Union[str, dict[str, Any], list[Any]]
 
-# Matches the hosted service. Above the tokenizer's single-token codes a Choice
-# is answered in two stages (see Engine).
+# The hosted services' request limits, so a client written against them never
+# sees a different answer here. Above the tokenizer's single-token codes a
+# Choice is answered in two stages (see Engine).
 MAX_CHOICE_OPTIONS = 255
+MAX_SCORE_LEVELS = 10
+MAX_QUESTIONS = 64
 
 # The hosted SDK sends its default model name on every request. Treating these as
 # "whichever model this server loaded" is what lets that client talk to ruling
@@ -27,30 +30,35 @@ def render_text(value: Text) -> str:
     return value if isinstance(value, str) else json.dumps(value, ensure_ascii=False)
 
 
-def _non_empty(value: Text) -> Text:
-    if not render_text(value).strip():
-        raise ValueError("text must not be empty")
-    return value
+def has_text(value: Text | None) -> bool:
+    return value is not None and bool(render_text(value).strip())
 
 
-class Choice(BaseModel):
-    """Pick one option from a closed set. Criteria maps option key to an optional description."""
+class Strict(BaseModel):
+    """A question refuses fields it does not know, as the hosted services do, so a typo
+    such as `instruction` fails loudly instead of asking a different question."""
+
+    model_config = ConfigDict(extra="forbid")
+
+
+class Choice(Strict):
+    """Pick one option from a closed set. Criteria maps option key to an optional description.
+
+    The schema admits one option, as the hosted services' does; `check_askable` is what
+    refuses it, naming the question.
+    """
 
     type: Literal["choice"] = "choice"
-    instructions: Text
-    criteria: dict[str, Text | None] = Field(min_length=2, max_length=MAX_CHOICE_OPTIONS)
-
-    _instructions = field_validator("instructions")(_non_empty)
+    instructions: Text | None = None
+    criteria: dict[str, Text | None] = Field(min_length=1, max_length=MAX_CHOICE_OPTIONS)
 
 
-class Score(BaseModel):
+class Score(Strict):
     """Place the state on an ordered scale. Criteria lists the levels from lowest to highest."""
 
     type: Literal["score"] = "score"
-    instructions: Text
-    criteria: list[Text] = Field(min_length=2)
-
-    _instructions = field_validator("instructions")(_non_empty)
+    instructions: Text | None = None
+    criteria: list[Text] = Field(min_length=2, max_length=MAX_SCORE_LEVELS)
 
     @field_validator("criteria")
     @classmethod
@@ -61,30 +69,59 @@ class Score(BaseModel):
         return levels
 
 
-class NoulCriteria(BaseModel):
+class NoulCriteria(Strict):
     """Optional descriptions of what a true and a false answer mean."""
 
     true: Text | None = None
     false: Text | None = None
 
 
-class Noul(BaseModel):
-    """Judge whether a statement about the state is true."""
+class Noul(Strict):
+    """Judge whether a statement about the state is true. The statement is the instructions,
+    or, without them, what the criteria say a true or a false answer means."""
 
     type: Literal["noul"] = "noul"
-    instructions: Text
+    instructions: Text | None = None
     criteria: NoulCriteria | None = None
 
-    _instructions = field_validator("instructions")(_non_empty)
+    def described(self) -> bool:
+        return self.criteria is not None and (has_text(self.criteria.true) or has_text(self.criteria.false))
 
 
 Question = Annotated[Union[Choice, Score, Noul], Field(discriminator="type")]
 
 
+# What a noul asks when it has no instructions and only its criteria describe the answers.
+DESCRIBED_NOUL = "Which description fits the state?"
+
+
+def question_statement(question: Question) -> str:
+    """The question's instructions as prompt text, or the standing question a described noul asks."""
+    return render_text(question.instructions) if has_text(question.instructions) else DESCRIBED_NOUL
+
+
+class InvalidOptions(ValueError):
+    """A well-formed question the model cannot answer, named so the error can point at it."""
+
+    def __init__(self, question_id: str, message: str):
+        super().__init__(f"questions.{question_id}: {message}")
+        self.question_id = question_id
+
+
+def check_askable(questions: dict[str, Question], max_options: int) -> None:
+    """Refuse what the hosted services refuse after schema validation: a choice outside
+    2..`max_options`, or a question with nothing to ask."""
+    for qid, question in questions.items():
+        if isinstance(question, Choice) and not 2 <= len(question.criteria) <= max_options:
+            raise InvalidOptions(qid, f"a choice needs 2 to {max_options} options, got {len(question.criteria)}")
+        if not has_text(question.instructions) and not (isinstance(question, Noul) and question.described()):
+            raise InvalidOptions(qid, "needs instructions (a yes/no question may describe true or false instead)")
+
+
 class SystemOneRequest(BaseModel):
     model: str | None = None
     state: State
-    questions: dict[str, Question] = Field(min_length=1)
+    questions: dict[str, Question] = Field(min_length=1, max_length=MAX_QUESTIONS)
 
     @model_validator(mode="after")
     def ids_are_non_empty(self) -> "SystemOneRequest":

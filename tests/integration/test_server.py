@@ -43,14 +43,31 @@ def test_endpoint_returns_typed_answers(app, engine):
 
 
 def test_validation_and_model_errors(app):
+    def code(body):
+        response = client.post("/v1/systemone", json=body)
+        return response.status_code, response.json()["error"]["code"], response.json()["error"].get("param")
+
     with TestClient(app) as client:
-        assert client.post("/v1/systemone", json={"state": "x", "questions": {}}).status_code == 422
-        bad = {"state": "x", "questions": {"q": {"type": "choice", "instructions": "q", "criteria": {"one": None}}}}
-        assert client.post("/v1/systemone", json=bad).status_code == 422
-        assert client.post("/v1/systemone", json={**PAYLOAD, "model": "nope"}).status_code == 404
+        assert code({"state": "x", "questions": {}}) == (422, "invalid_input", "questions")
+        one = {"state": "x", "questions": {"q": {"type": "choice", "instructions": "q", "criteria": {"one": None}}}}
+        assert code(one) == (422, "invalid_options", "questions.q")
+        assert code({**PAYLOAD, "model": "nope"})[:2] == (404, "unknown_model")
         too_many = {"state": "x", "questions": {"q": {"type": "choice", "instructions": "q",
                     "criteria": {f"o{i}": None for i in range(256)}}}}
-        assert client.post("/v1/systemone", json=too_many).status_code == 422
+        assert code(too_many) == (422, "invalid_input", "questions.q.choice.criteria")
+        noul = {"type": "noul", "instructions": "x"}
+        assert code({"state": "x", "questions": {f"q{i}": noul for i in range(65)}}) == (422, "invalid_input", "questions")
+        wordy = {"state": " ".join(f"w{i}" for i in range(40000)), "questions": {"q": noul}}
+        assert code(wordy) == (422, "context_too_long", "questions.q")
+
+
+def test_a_noul_described_by_its_criteria_alone_reads_the_state(app):
+    questions = {"angry": {"type": "noul", "criteria": {"true": "the customer is angry", "false": "the customer is calm"}}}
+    with TestClient(app) as client:
+        furious = client.post("/v1/systemone", json={"state": "This is the third time. I am done with you.", "questions": questions})
+        pleased = client.post("/v1/systemone", json={"state": "Thanks, that fixed it, great service.", "questions": questions})
+    assert furious.status_code == 200 and pleased.status_code == 200
+    assert furious.json()["answers"]["angry"]["noul"] > pleased.json()["answers"]["angry"]["noul"]
 
 
 def test_models_and_playground(app, engine):

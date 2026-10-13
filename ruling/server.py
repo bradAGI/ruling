@@ -17,7 +17,7 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from ruling.config import Settings
 from ruling.engine import InputTooLong
 from ruling.hosted import HostUnavailable
-from ruling.questions import ModelList, SystemOneRequest, SystemOneResponse
+from ruling.questions import InvalidOptions, ModelList, SystemOneRequest, SystemOneResponse, check_askable
 from ruling.registry import Registry, UnknownModel
 
 log = logging.getLogger("ruling")
@@ -104,6 +104,10 @@ def create_app(registry: Registry, api_key: str | None, max_pending: int) -> Fas
             name, engine = registry.resolve(request.model)
         except UnknownModel as exc:
             raise ApiError(404, "unknown_model", str(exc), "model") from exc
+        try:
+            check_askable(request.questions, engine.max_options)
+        except InvalidOptions as exc:
+            raise ApiError(422, "invalid_options", str(exc), f"questions.{exc.question_id}") from exc
         if not admission.enter():
             raise ApiError(429, "queue_full", f"{admission.limit} requests are already in flight",
                            retry_after=admission.retry_after())
@@ -111,7 +115,10 @@ def create_app(registry: Registry, api_key: str | None, max_pending: int) -> Fas
         try:
             response = await run_in_threadpool(engine.evaluate, request)
         except InputTooLong as exc:
-            raise ApiError(413, "payload_too_large", str(exc)) from exc
+            param = f"questions.{exc.question_id}" if exc.question_id is not None else None
+            raise ApiError(422, "context_too_long", str(exc), param) from exc
+        except InvalidOptions as exc:
+            raise ApiError(422, "invalid_options", str(exc), f"questions.{exc.question_id}") from exc
         except ValueError as exc:
             raise ApiError(422, "invalid_input", str(exc)) from exc
         except HostUnavailable as exc:

@@ -10,7 +10,7 @@ from ruling.calibration import Calibration, Provenance, softmax
 from ruling.config import Settings
 from ruling.engine import InputTooLong
 from ruling.hosted import VLLM_PREFIX, HostUnavailable, VllmEngine
-from ruling.questions import Choice, Noul, Score
+from ruling.questions import Choice, InvalidOptions, Noul, Score
 from ruling.registry import build_engine
 
 QUESTIONS = {
@@ -69,8 +69,9 @@ def test_a_choice_over_vllms_label_alphabet_is_refused_before_any_request():
     calls = []
     engine = engine_with(lambda r: calls.append(r) or httpx.Response(200, json=VLLM_RESPONSE))
     wide = {"pick": Choice(instructions="?", criteria={f"o{i}": None for i in range(27)})}
-    with pytest.raises(ValueError, match="27 options"):
+    with pytest.raises(InvalidOptions, match="2 to 26 options") as caught:
         engine.score("s", wide)
+    assert caught.value.question_id == "pick"
     assert calls == [] and engine.max_options == 26
 
 

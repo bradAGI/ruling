@@ -21,7 +21,7 @@ The first start downloads the default model, `mlx-community/Qwen3.5-4B-4bit`
 | `RULING_PRIOR_DEBIAS` | `false` | Subtract a content-free letter prior. Measured, does not help; kept so you can re-check with another model |
 | `RULING_CALIBRATION` | unset | Path to a `calibration.json` written by `ruling calibrate` |
 | `RULING_API_KEY` | unset | When set, `/v1/*` requires `Authorization: Bearer <key>` |
-| `RULING_MAX_INPUT_TOKENS` | `65536` | Whole-request budget: state plus every question. Above this the request is rejected with 413 |
+| `RULING_MAX_INPUT_TOKENS` | `65536` | Whole-request budget: state plus every question. Above this the request is rejected with 422 `context_too_long` |
 | `RULING_MAX_BRANCH_TOKENS` | `32768` | Per-branch budget: state plus one question. A single oversized question is rejected even when the request fits |
 | `RULING_OPENAI_BASE_URL` | unset | Required for `openai:` models. The endpoint serving them, ending in `/v1` |
 | `RULING_OPENAI_API_KEY` | unset | Sent as a bearer token when the host wants one. Local servers usually do not |
@@ -165,10 +165,15 @@ measure it there before trusting a threshold fitted here.
   "questions": {
     "<id>": {"type": "choice", "instructions": "...", "criteria": {"<key>": "description, JSON, or null"}},
     "<id>": {"type": "score",  "instructions": "...", "criteria": ["lowest level", "...", "highest level"]},
-    "<id>": {"type": "noul",   "instructions": "a statement to judge"}
+    "<id>": {"type": "noul",   "instructions": "a statement to judge"},
+    "<id>": {"type": "noul",   "criteria": {"true": "what a yes looks like", "false": "what a no looks like"}}
   }
 }
 ```
+
+A request carries 1 to 64 questions; a choice has 2 to 255 options and a score
+2 to 10 levels. A choice or score needs instructions; a noul may describe what
+true or false looks like in its criteria instead, with or without instructions.
 
 Instructions, option descriptions, and levels may be strings or JSON
 structure. Answers come back keyed by the same ids:
@@ -190,8 +195,9 @@ Errors come in the hosted API's shape, `{"error": {"code", "message",
 
 | Status | `code` | When |
 |---|---|---|
-| 422 | `invalid_input` | a malformed request (`param` names the field), a Choice over 255 options, or a state the engine refuses |
-| 413 | `payload_too_large` | a request over a token limit |
+| 422 | `invalid_input` | a malformed request: `param` names the field, such as a choice over 255 options, a score over 10 levels, or more than 64 questions |
+| 422 | `invalid_options` | a well-formed question the model cannot answer: a choice with one option or more than the model reads, or nothing to ask; `param` is `questions.<id>` |
+| 422 | `context_too_long` | a request over a token limit; `param` is `questions.<id>` when one question is at fault |
 | 404 | `unknown_model` | a `model` the server does not answer for; the message lists the names it does |
 | 401 | `unauthorized` | an API key is configured and missing or wrong |
 | 429 | `queue_full` | `RULING_MAX_PENDING` requests are already in flight; `Retry-After` says how many seconds to wait |

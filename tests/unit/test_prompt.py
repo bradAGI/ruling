@@ -1,7 +1,7 @@
 import json
 
 from ruling.prompt import render_question, render_state
-from ruling.questions import Choice, Noul, Score
+from ruling.questions import Choice, Noul, NoulCriteria, Score
 
 CODES = list("ABCDEFG")
 
@@ -60,3 +60,11 @@ def test_hosted_message_puts_the_stable_question_before_the_state():
     assert a.endswith(rendered.closing)
     # The local engine's layout, state then question, is untouched.
     assert rendered.text == f"{rendered.question}\n{rendered.options}\n{rendered.closing}"
+
+
+def test_a_noul_without_instructions_is_asked_through_its_descriptions():
+    question = Noul(criteria=NoulCriteria(true="the customer is angry", false="the customer is calm"))
+    rendered = render_question(question, CODES)
+    assert "None" not in rendered.text
+    assert "the customer is angry" in rendered.options and "the customer is calm" in rendered.options
+    assert rendered.keys == ["yes", "no"]

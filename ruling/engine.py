@@ -74,7 +74,11 @@ TEMPLATE_KWARGS = {"enable_thinking": False}
 class InputTooLong(ValueError):
     """Raised with a message that names the maximum context length, the phrase clients
     such as the Decision Index harness look for to classify a rejection as a capacity
-    limit rather than a failure."""
+    limit rather than a failure. `question_id` names the question at fault when one is."""
+
+    def __init__(self, message: str, question_id: str | None = None):
+        super().__init__(message)
+        self.question_id = question_id
 
 
 @dataclass(frozen=True)
@@ -350,7 +354,7 @@ class Engine:
         if widest is not None and len(prefix_tokens) + len(widest.tokens) > self.max_branch_tokens:
             raise InputTooLong(f"question {widest.question_id!r} makes a branch of "
                                f"{len(prefix_tokens) + len(widest.tokens)} tokens, over the maximum context length "
-                               f"of {self.max_branch_tokens} for one branch")
+                               f"of {self.max_branch_tokens} for one branch", question_id=widest.question_id)
         total = len(prefix_tokens) + sum(len(p.tokens) for p in passes)
         if total > self.max_input_tokens:
             raise InputTooLong(f"request is {total} tokens, over the maximum context length of "

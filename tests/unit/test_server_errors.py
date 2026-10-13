@@ -70,7 +70,7 @@ def test_unknown_model_lists_what_the_server_answers_for():
 
 
 @pytest.mark.parametrize("failing, status, code", [
-    (InputTooLong("request is 9 tokens, over the maximum context length of 8"), 413, "payload_too_large"),
+    (InputTooLong("request is 9 tokens, over the maximum context length of 8"), 422, "context_too_long"),
     (ValueError("state contains the reserved split marker"), 422, "invalid_input"),
     (HostUnavailable("jev is unavailable, returned 503"), 503, "upstream_unavailable"),
 ])
@@ -79,6 +79,48 @@ def test_engine_failures_map_to_codes(failing, status, code):
         response = client.post("/v1/systemone", json=PAYLOAD)
     assert response.status_code == status
     assert response.json()["error"] == {"code": code, "message": str(failing)}
+
+
+def test_a_question_too_long_for_the_model_is_named_in_the_error():
+    too_long = InputTooLong("question 'refund' makes a branch of 9 tokens, over the maximum context length of 8",
+                            question_id="refund")
+    with TestClient(app_with({"m": FakeEngine("m", failing=too_long)}, "m")) as client:
+        response = client.post("/v1/systemone", json=PAYLOAD)
+    assert response.status_code == 422
+    assert response.json()["error"] == {"code": "context_too_long", "message": str(too_long), "param": "questions.refund"}
+
+
+@pytest.mark.parametrize("question, detail", [
+    ({"type": "choice", "instructions": "pick", "criteria": {"only": None}}, "got 1"),
+    ({"type": "choice", "instructions": "pick", "criteria": {f"o{i}": None for i in range(27)}}, "2 to 26"),
+    ({"type": "score", "criteria": ["lo", "hi"]}, "needs instructions"),
+    ({"type": "noul", "instructions": " "}, "needs instructions"),
+])
+def test_a_question_the_model_cannot_answer_is_refused_by_name(question, detail):
+    engine = FakeEngine("m")
+    engine.max_options = 26
+    with TestClient(app_with({"m": engine}, "m")) as client:
+        response = client.post("/v1/systemone", json={"state": "x", "questions": {"q": question}})
+    assert response.status_code == 422
+    error = response.json()["error"]
+    assert error["code"] == "invalid_options" and error["param"] == "questions.q" and detail in error["message"]
+
+
+def test_a_noul_described_by_its_criteria_alone_is_answered():
+    question = {"type": "noul", "criteria": {"true": "the customer is angry", "false": "the customer is calm"}}
+    with TestClient(app_with({"m": FakeEngine("m")}, "m")) as client:
+        response = client.post("/v1/systemone", json={"state": "I hate this", "questions": {"q": question}})
+    assert response.status_code == 200 and 0 <= response.json()["answers"]["q"]["noul"] <= 1
+
+
+def test_a_hosted_engines_option_limit_is_refused_by_name():
+    from ruling.questions import InvalidOptions
+
+    engine = FakeEngine("m", failing=InvalidOptions("q", "a choice needs 2 to 20 options, got 21"))
+    with TestClient(app_with({"m": engine}, "m")) as client:
+        response = client.post("/v1/systemone", json=PAYLOAD)
+    assert response.status_code == 422
+    assert response.json()["error"]["code"] == "invalid_options" and response.json()["error"]["param"] == "questions.q"
 
 
 def test_missing_key_is_unauthorized_in_the_same_shape():

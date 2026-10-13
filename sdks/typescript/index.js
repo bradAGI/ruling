@@ -2,7 +2,7 @@
 
 export const choice = (instructions, criteria) => ({ type: "choice", instructions, criteria });
 export const score = (instructions, criteria) => ({ type: "score", instructions, criteria });
-export const noul = (instructions) => ({ type: "noul", instructions });
+export const noul = (instructions, criteria) => ({ type: "noul", instructions, ...(criteria && { criteria }) });
 
 export class RulingError extends Error {
   constructor(status, detail) {

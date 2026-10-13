@@ -3,7 +3,8 @@ export type State = Text;
 
 export interface Choice { type: "choice"; instructions: Text; criteria: Record<string, Text | null> }
 export interface Score { type: "score"; instructions: Text; criteria: Text[] }
-export interface Noul { type: "noul"; instructions: Text }
+export interface NoulCriteria { true?: Text | null; false?: Text | null }
+export interface Noul { type: "noul"; instructions?: Text | null; criteria?: NoulCriteria }
 export type Question = Choice | Score | Noul;
 
 export interface ChoiceAnswer { type: "choice"; choice: string; probabilities: Record<string, number>; confidence: number }
@@ -28,7 +29,7 @@ export interface ApiError { code: string; message: string; param?: string }
 
 export function choice(instructions: Text, criteria: Record<string, Text | null>): Choice;
 export function score(instructions: Text, criteria: Text[]): Score;
-export function noul(instructions: Text): Noul;
+export function noul(instructions: Text | null, criteria?: NoulCriteria): Noul;
 
 export class RulingError extends Error { status: number; detail: ApiError | unknown }
 

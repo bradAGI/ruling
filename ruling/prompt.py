@@ -10,7 +10,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 
-from ruling.questions import Choice, Noul, Score, State, render_text
+from ruling.questions import Choice, Noul, Score, State, question_statement, render_text
 
 SYSTEM_PROMPT = (
     "You are a decision engine embedded in software. You are shown a state and one "
@@ -53,7 +53,7 @@ def render_question(question: Choice | Score | Noul, codes: list[str], rotation:
     Averaging over orderings cancels the positional bias small models show
     toward particular letters.
     """
-    instructions = render_text(question.instructions)
+    instructions = question_statement(question)
     if isinstance(question, Choice):
         keys = _rotate(list(question.criteria), rotation)
         lines = [_option_line(code, key, question.criteria[key]) for code, key in zip(codes, keys)]

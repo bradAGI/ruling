@@ -49,8 +49,8 @@ curl -s localhost:8010/v1/systemone -H 'content-type: application/json' -d '{
 ```
 
 Three question types: **choice** picks one option, **score** places the state
-on an ordered scale, **noul** judges whether a statement is true. Ask as many
-as you like in one request; the state is read once.
+on an ordered scale, **noul** judges whether a statement is true, or which of
+two descriptions fits. Ask up to 64 in one request; the state is read once.
 
 There is a playground at `http://127.0.0.1:8010/`, a one-shot CLI (`uv run
 ruling ask --help`), a Python client (`from ruling import RulingClient`), a
