@@ -59,6 +59,12 @@ TypeSafe's own official SDK works against it unchanged — point
 `TYPESAFE_BASE_URL` at the server. Details for all of them are in
 [docs/reference.md](docs/reference.md).
 
+![The playground: a state, three questions, a model picker, and each answer's probabilities as bars](assets/playground.png)
+
+The playground's model picker lists every name the server answers to; [serve
+several models](#serve-several-models-from-one-process) to compare them on the
+same state.
+
 ## Pick the primary model
 
 `RULING_MODEL` is the **primary** model: it answers every question. It is the
@@ -80,11 +86,23 @@ questions the primary is unsure about, and is set separately with
 Any of these can also be the secondary. The other settings — token limits, API
 key, calibration, logprob caps — are in [docs/reference.md](docs/reference.md#install-and-run).
 
+### Serve several models from one process
+
 One process can also serve several models by name — a plain base, a tuned
 adapter per decision, a large model for escalation — and adapters on the same
 base share one copy of its weights. Put them in a JSON file and set
 `RULING_MODELS`; requests pick one with `model`, and `GET /v1/models` lists
-them. Details in [docs/reference.md](docs/reference.md#serve-several-models).
+them:
+
+```bash
+cat > models.json <<'EOF'
+{"small": {"model": "mlx-community/Qwen3.5-0.8B-4bit"},
+ "large": {"model": "mlx-community/Qwen3-4B-Instruct-2507-4bit"}}
+EOF
+RULING_MODELS=models.json uv run ruling serve
+```
+
+Details in [docs/reference.md](docs/reference.md#serve-several-models).
 
 ## Make it yours: fine-tune on your own decisions
 

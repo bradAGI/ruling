@@ -51,6 +51,10 @@ values say what answers under that name:
 }
 ```
 
+```bash
+RULING_MODELS=models.json uv run ruling serve
+```
+
 `model` takes the same syntax as `RULING_MODEL`; `adapter` and `calibration`
 are optional and resolve relative to the file. The primary is still what
 `RULING_MODEL` names, and still answers `default`, `jev-latest`, and requests
@@ -211,7 +215,14 @@ and the hosted services.
 `description` and `release_date`, plus `base` (the weights behind the name),
 the Hugging Face revision, adapter digest, the calibration temperatures in
 force, and limits that only a local engine knows. `GET /health` returns the
-primary's name. `GET /` is a playground page.
+primary's name.
+
+`GET /` is a playground page: a state box, a questions box, a model picker
+filled from `GET /v1/models`, and each answer's probabilities drawn as bars
+with the confidence beneath. A refused request shows its status, code and
+message, so it is the quickest way to see what a server answers for and how.
+
+![The playground after a request to a model named large](../assets/playground.png)
 
 ### TypeSafe's own SDK talks to ruling
 
