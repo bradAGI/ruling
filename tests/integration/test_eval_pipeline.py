@@ -70,3 +70,29 @@ def test_inputs_beyond_the_engine_limit_are_reported_not_fatal(engine):
     records = load_dataset(DATASET)[:1] + [too_long]
     summary = report(collect(engine, records), Calibration())["question_types"]["noul"]
     assert summary["unscored"] == 1 and summary["count"] == 1
+
+
+def test_cli_eval_scores_hosted_rows_from_a_json_array(tmp_path, capsys, monkeypatch, engine):
+    rows = [
+        {"id": "r1", "weight": 2.0,
+         "state": {"subject": "Charged twice", "message": "Two charges for one order, please refund one."},
+         "questions": {"team": {"type": "choice", "instructions": "Which team?",
+                                "criteria": {"billing": None, "technical": None, "sales": None}},
+                       "urgency": {"type": "score", "instructions": "How urgent?", "criteria": ["low", "mid", "high"]},
+                       "human": {"type": "noul", "instructions": "The customer asks a person to act."}},
+         "labels": {"team": {"billing": 0.8, "technical": 0.1, "sales": 0.1}, "urgency": "1", "human": "true"}},
+        {"id": "r2", "state": "The login page returns a 500 error since the deploy.",
+         "question": {"type": "noul", "instructions": "This is a technical problem."}, "label": 0.9},
+        {"id": "r3", "state": "Unlabeled row.",
+         "questions": {"team": {"type": "choice", "instructions": "Which team?", "criteria": {"billing": None, "sales": None}}}},
+    ]
+    dataset = tmp_path / "rows.json"
+    dataset.write_text(json.dumps(rows))
+    monkeypatch.setenv("RULING_MODEL", engine.model_id)
+    main(["eval", str(dataset), "--rotations", str(engine.rotations)])
+    data = json.loads(capsys.readouterr().out)
+    assert data["overall"]["n"] == 4
+    assert set(data["overall"]["selective"]) == {"0.5", "0.7", "0.9", "0.95"}
+    assert {t: m["n"] for t, m in data["by_type"].items()} == {"choice": 1, "score": 1, "noul": 2}
+    assert data["by_question"]["decision"]["n"] == 1
+    assert data["question_types"]["choice"]["count"] == 2 and data["question_types"]["choice"]["labeled_count"] == 1

@@ -22,6 +22,17 @@ fields such as `variant` or `group` are kept for your own analysis and ignored.
 "references": {"<id>": {"jev": {"yes": 0.91, "no": 0.09}}}
 ```
 
+Rows written for hosted decision platforms load unchanged, from `.jsonl` or a `.json` array. They
+add an optional `id`, a `weight` (default 1.0; a row's share of a training
+update, never negative), and extra label forms: `"true"`/`"false"` for Noul, a
+score option id such as `"2"`, and soft labels (a probability of yes for Noul,
+a map over every option for any type, a list in option order for Choice and
+Score). A soft label must cover every option, be non-negative, and sum to 1
+within 0.02; it becomes the `target` reference with the label set to its most
+likely option. A single-question row `{"state", "question", "label"}` becomes
+one question named `decision`. See the
+[evaluation reference](../docs/reference.md#evaluation) for the full table.
+
 ## Bundled
 
 | File | Records | Questions | Source |

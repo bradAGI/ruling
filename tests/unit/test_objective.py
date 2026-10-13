@@ -67,3 +67,27 @@ def test_the_ranking_gradient_lowers_the_wrong_answers_confidence():
     grad = mx.grad(loss)(logits)
     # Descending the gradient lowers the wrong row's top logit, so its confidence falls.
     assert float(grad[1, 0]) > 0
+
+
+def test_uniform_weights_reproduce_the_unweighted_objective_exactly():
+    rng = np.random.default_rng(3)
+    for _ in range(50):
+        rows = int(rng.integers(1, 7))
+        probabilities = [list(rng.dirichlet(np.ones(int(rng.integers(2, 5))))) for _ in range(rows)]
+        targets = [list(rng.dirichlet(np.ones(len(p)))) for p in probabilities]
+        log_probs, mask, target = batch(probabilities, targets)
+        terms = dict(label_smoothing=0.1, brier_weight=0.5, ranking_weight=0.3)
+        unweighted = value(log_probs, mask, target, **terms)
+        assert value(log_probs, mask, target, weights=mx.ones(rows), **terms) == unweighted
+        # Only the relative weights matter: the update is the weighted mean, not the weighted sum.
+        assert value(log_probs, mask, target, weights=mx.full((rows,), 4.0), **terms) == pytest.approx(unweighted, rel=1e-5)
+
+
+def test_weights_scale_each_rows_share_of_the_batch():
+    log_probs, mask, targets = batch([[0.7, 0.2, 0.1], [0.4, 0.6]], [[1, 0, 0], [0, 1]])
+    weighted = value(log_probs, mask, targets, weights=mx.array([3.0, 1.0]))
+    assert weighted == pytest.approx(-(3 * np.log(0.7) + np.log(0.6)) / 4, rel=1e-5)
+    # A zero-weight row contributes nothing, to the cross-entropy or the Brier term.
+    alone, mask1, target1 = batch([[0.4, 0.6]], [[0, 1]])
+    assert value(log_probs, mask, targets, weights=mx.array([0.0, 1.0]), brier_weight=1.0) == pytest.approx(
+        value(alone, mask1, target1, brier_weight=1.0), rel=1e-5)

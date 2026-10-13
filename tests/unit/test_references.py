@@ -37,9 +37,12 @@ def test_report_measures_agreement_with_references():
         obs(1, [0.0, 2.0], 0, [0.8, 0.2]),   # ruling wrong, jev right, disagree
         obs(2, [2.0, 0.0], None, [0.4, 0.6]),  # unlabeled, disagree
     ]
-    summary = report(observations, Calibration())["question_types"]["choice"]
+    full = report(observations, Calibration())
+    summary = full["question_types"]["choice"]
     assert summary["count"] == 3 and summary["labeled_count"] == 2
     assert summary["accuracy"] == pytest.approx(0.5)
+    assert full["overall"]["n"] == full["by_type"]["choice"]["n"] == full["by_question"]["q"]["n"] == 2
+    assert full["overall"]["accuracy"] == pytest.approx(summary["accuracy"])
     jev = summary["references"]["jev"]
     assert jev["count"] == 3
     assert jev["argmax_agreement"] == pytest.approx(1 / 3)
