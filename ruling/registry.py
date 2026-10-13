@@ -20,7 +20,17 @@ from ruling.config import Settings
 from ruling.decision import DecisionEngine, is_checkpoint
 from ruling.engine import Engine, model_released
 from ruling.failover import FailoverEngine
-from ruling.hosted import HOSTED_PREFIX, OPENROUTER_PREFIX, TYPESAFE_PREFIX, Budget, HostedEngine, OpenRouterEngine, TypeSafeEngine
+from ruling.hosted import (
+    HOSTED_PREFIX,
+    OPENROUTER_PREFIX,
+    TYPESAFE_PREFIX,
+    VLLM_PREFIX,
+    Budget,
+    HostedEngine,
+    OpenRouterEngine,
+    TypeSafeEngine,
+    VllmEngine,
+)
 from ruling.questions import DEFAULT_MODEL_ALIASES, ModelInfo
 
 ENTRY_FIELDS = ("model", "adapter", "calibration")
@@ -89,6 +99,11 @@ def build_engine(settings: Settings):
     if settings.model.startswith(TYPESAFE_PREFIX):
         return TypeSafeEngine(settings.model, calibration, os.environ.get(BASE_URL_ENV, DEFAULT_BASE_URL),
                               os.environ.get(API_KEY_ENV), settings.max_input_tokens, settings.max_branch_tokens)
+    if settings.model.startswith(VLLM_PREFIX):
+        if not settings.vllm_base_url:
+            raise ValueError("set RULING_VLLM_BASE_URL to the vLLM server, without a path")
+        return VllmEngine(settings.model, calibration, settings.vllm_base_url, settings.vllm_api_key,
+                          settings.max_input_tokens, settings.max_branch_tokens)
     if settings.model.startswith(HOSTED_PREFIX):
         if not settings.openai_base_url:
             raise ValueError("set RULING_OPENAI_BASE_URL to the endpoint serving the model, ending in /v1")

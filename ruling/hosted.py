@@ -257,13 +257,14 @@ class TypeSafeEngine:
 
     prior_debias = False
     max_options = MAX_CHOICE_OPTIONS
+    prefix = TYPESAFE_PREFIX
     rotations = 1
     """The host orders options as it sees fit; ruling does not re-ask it."""
 
     def __init__(self, model: str, calibration: Calibration, base_url: str, api_key: str | None,
                  max_input_tokens: int, max_branch_tokens: int, client: httpx.Client | None = None):
-        self.remote = model.removeprefix(TYPESAFE_PREFIX)
-        self.model_id = TYPESAFE_PREFIX + self.remote
+        self.remote = model.removeprefix(self.prefix)
+        self.model_id = self.prefix + self.remote
         self.revision = None
         self.adapter = None
         self.max_input_tokens = max_input_tokens
@@ -277,7 +278,14 @@ class TypeSafeEngine:
     def provenance(self) -> Provenance:
         return Provenance(self.model_id, self.revision, self.rotations, self.prior_debias, self.adapter)
 
+    def refusal(self, response: httpx.Response) -> RuntimeError:
+        """The exception for a non-200 answer other than the host's context limit."""
+        return unavailable_or_error(self.model_id, response)
+
     def score(self, state: State, questions: dict[str, Choice | Score | Noul]) -> Scored:
+        for qid, question in questions.items():
+            if len(option_keys(question)) > self.max_options:
+                raise ValueError(f"question {qid!r} has {len(option_keys(question))} options; {self.model_id} takes at most {self.max_options}")
         body = {"state": state, "questions": {qid: q.model_dump(exclude_none=True) for qid, q in questions.items()}}
         if self.remote:
             body["model"] = self.remote
@@ -290,7 +298,7 @@ class TypeSafeEngine:
             raise InputTooLong(f"{self.model_id} refused the request, over the maximum context length: "
                                f"{response.text[:300]}")
         if response.status_code != 200:
-            raise unavailable_or_error(self.model_id, response)
+            raise self.refusal(response)
         data = response.json()
         raw = {}
         for qid, question in questions.items():
@@ -310,3 +318,33 @@ class TypeSafeEngine:
 
     def answer(self, question, raw: RawScore):
         return answer(question, raw, self.calibration)
+
+
+VLLM_PREFIX = "vllm:"
+VLLM_MAX_CHOICE_OPTIONS = 26
+"""vLLM labels a choice's options A to Z in the prompt, so a choice may offer at most 26.
+Its noul and score limits (two sides, ten levels) are within what ruling's own types allow."""
+
+
+class VllmEngine(TypeSafeEngine):
+    """A model, or a LoRA adapter by name, behind vLLM's own `/v1/systemone`.
+
+    vLLM reads the first reply token's label logprobs the way ruling does, so
+    the same questions come back in the same shape, batched across requests on
+    the GPU, and an adapter trained here and exported with `ruling export-adapter`
+    answers under the name vLLM was started with. Only the wire differs from the
+    TypeSafe engine: a `vllm:` id, no API key by default, and vLLM's refusals,
+    which are 400s with a reason, surface as invalid input rather than host
+    failures.
+    """
+
+    max_options = VLLM_MAX_CHOICE_OPTIONS
+    prefix = VLLM_PREFIX
+
+    def refusal(self, response: httpx.Response) -> RuntimeError:
+        if response.status_code == 400:
+            return ValueError(f"{self.model_id} refused the request: {response.text[:300]}")
+        if response.status_code == 501:
+            return RuntimeError(f"{self.model_id} has no read strategy in this vLLM; it cannot answer typed questions: "
+                                f"{response.text[:300]}")
+        return unavailable_or_error(self.model_id, response)

@@ -73,6 +73,7 @@ questions the primary is unsure about, and is set separately with
 | any other MLX checkpoint | `RULING_MODEL=<hub id or local path>` | tested with Qwen, Llama 3.2, Gemma 3 |
 | a model you serve elsewhere | `RULING_MODEL=openai:<name>` + `RULING_OPENAI_BASE_URL` | vLLM, llama.cpp, `mlx_lm.server`, or a commercial API; needs `top_logprobs` |
 | a model on OpenRouter | `RULING_MODEL=openrouter:<name>` | with a spend budget |
+| a model or LoRA adapter on an NVIDIA box | `RULING_MODEL=vllm:<name>` + `RULING_VLLM_BASE_URL` | vLLM's own decision endpoint, batched on the GPU; export an adapter trained here with `ruling export-adapter` |
 | Cloudflare's Clef-flash, locally | `RULING_MODEL=typesafe:clef-flash` + `TYPESAFE_BASE_URL=http://127.0.0.1:8000` | a trained 9B decision model; run the [MLX port](https://huggingface.co/mlx-community/clef-flash-4bit) with `python clef_mlx.py serve` and point ruling at it. 6.2 GB, the best-calibrated model we have measured |
 | Jev itself, or any System One server | `RULING_MODEL=typesafe:<alias>` + `TYPESAFE_API_KEY` | `typesafe:jev-latest`; the host's own probabilities pass straight through. Mostly useful as the secondary, below |
 

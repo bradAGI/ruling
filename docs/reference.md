@@ -16,7 +16,7 @@ The first start downloads the default model, `mlx-community/Qwen3.5-4B-4bit`
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `RULING_MODEL` | `mlx-community/Qwen3.5-4B-4bit` | The primary model. Any MLX chat model, `openai:<model>` for a model behind an OpenAI-compatible server, `openrouter:<model>`, or `typesafe:<alias>` for TypeSafe's API or any server speaking its protocol (`TYPESAFE_BASE_URL`, `TYPESAFE_API_KEY`). Tested: Qwen3.5, Llama 3.2, Gemma 3 |
+| `RULING_MODEL` | `mlx-community/Qwen3.5-4B-4bit` | The primary model. Any MLX chat model, `openai:<model>` for a model behind an OpenAI-compatible server, `openrouter:<model>`, `vllm:<model or adapter>` for vLLM's own decision endpoint, or `typesafe:<alias>` for TypeSafe's API or any server speaking its protocol (`TYPESAFE_BASE_URL`, `TYPESAFE_API_KEY`). Tested: Qwen3.5, Llama 3.2, Gemma 3 |
 | `RULING_ROTATIONS` | `3` | Answer orderings averaged per question. `1` is fastest. See How it works |
 | `RULING_PRIOR_DEBIAS` | `false` | Subtract a content-free letter prior. Measured, does not help; kept so you can re-check with another model |
 | `RULING_CALIBRATION` | unset | Path to a `calibration.json` written by `ruling calibrate` |
@@ -27,6 +27,8 @@ The first start downloads the default model, `mlx-community/Qwen3.5-4B-4bit`
 | `RULING_OPENAI_API_KEY` | unset | Sent as a bearer token when the host wants one. Local servers usually do not |
 | `RULING_OPENAI_TOP_LOGPROBS` | `20` | How many top logprobs the host returns, which is also the option ceiling. OpenAI allows 20, `mlx_lm.server` allows 11 |
 | `RULING_OPENAI_EXTRA_BODY` | `{}` | JSON merged into every request, for host-specific fields such as `{"chat_template_kwargs": {"enable_thinking": false}}` |
+| `RULING_VLLM_BASE_URL` | unset | Required for `vllm:` models: the vLLM server, without a path. See [On NVIDIA: vLLM](#on-nvidia-vllm) |
+| `RULING_VLLM_API_KEY` | unset | Sent as a bearer token when the vLLM server was started with one |
 | `RULING_ADAPTER` | unset | A LoRA directory from `ruling train` or `ruling import-adapter`; see [docs/adapter.md](adapter.md) |
 | `RULING_CASCADE_TO` | unset | The secondary model, in the same syntax as `RULING_MODEL`; it answers only the questions the primary is unsure about |
 | `RULING_CASCADE_THRESHOLD` | unset | Top probability below which a question is escalated; required with `RULING_CASCADE_TO` |
@@ -98,6 +100,34 @@ uv run ruling ask "Since this morning every request with our API key returns 401
   --score  "urgency=How urgent is this?|Can wait,This week,Today" \
   --noul   "blocked=The customer is blocked from using the product."
 ```
+
+### On NVIDIA: vLLM
+
+ruling's scoring runs on Apple Silicon through MLX. On NVIDIA (or AMD through
+vLLM's ROCm build) the same decisions come from [vLLM](https://github.com/vllm-project/vllm),
+whose `/v1/systemone` endpoint reads a question's label logprobs from the
+reply's first token the way ruling does, batches requests across the GPU, and
+serves LoRA adapters by name. It arrived on vLLM's main branch in October 2026
+and is in releases after 0.31.
+
+```bash
+vllm serve Qwen/Qwen3-4B-Instruct-2507 --enable-lora --lora-modules tickets=/adapters/tickets-peft \
+  --logprobs-mode raw_logprobs
+```
+
+```bash
+RULING_VLLM_BASE_URL=http://gpu-box:8000 RULING_MODEL=vllm:tickets uv run ruling serve
+```
+
+An adapter trained here goes across with `ruling export-adapter` (see
+[Training](#training)). A `vllm:` model is any name vLLM lists at its
+`/v1/models`: the base, or an adapter. It can be the primary, a registry
+entry beside local models, or the secondary of a cascade; calibration files
+fit on it with `ruling calibrate` apply as for any other engine. Two limits
+are vLLM's: a choice offers at most 26 options, and a request at most 64
+questions. vLLM also serves Cloudflare's Clef-flash, Clef-omni and Liquid's
+d1 on the same endpoint with their own prompts, so `vllm:Cloudflare/clef-flash`
+is the hosted equivalent of the MLX port used in the measurements.
 
 ## Training
 
