@@ -1,0 +1,131 @@
+"""Errors leave the server in the hosted API's shape, and a full queue turns requests away with a wait."""
+
+import threading
+
+import anyio
+import httpx
+import numpy as np
+import pytest
+from fastapi.testclient import TestClient
+
+from ruling.calibration import Calibration
+from ruling.engine import InputTooLong, RawScore, Scored, answer
+from ruling.hosted import HostUnavailable
+from ruling.questions import SystemOneResponse, Usage
+from ruling import registry as registry_module
+from ruling.registry import Registry
+from ruling.server import Admission, create_app
+
+PAYLOAD = {"state": "The invoice was paid twice.",
+           "questions": {"refund": {"type": "noul", "instructions": "A refund is due."}}}
+
+
+class FakeEngine:
+    prior_debias = False
+    max_options = 255
+    rotations = 1
+    max_input_tokens = max_branch_tokens = 1000
+    revision = adapter = None
+
+    def __init__(self, model_id, failing=None, gate: threading.Event | None = None):
+        self.model_id, self.failing, self.gate = model_id, failing, gate
+        self.calibration = Calibration()
+
+    def evaluate(self, request):
+        if self.gate is not None:
+            self.gate.wait()
+        if self.failing:
+            raise self.failing
+        raw = RawScore(keys=["yes", "no"], logits=np.array([2.0, 0.0]))
+        return SystemOneResponse(model=self.model_id,
+                                 answers={qid: answer(q, raw, self.calibration) for qid, q in request.questions.items()},
+                                 usage=Usage(input_tokens=5))
+
+
+@pytest.fixture(autouse=True)
+def no_hub_lookups(monkeypatch):
+    """Fake model ids have no Hugging Face repository to ask for a release date."""
+    monkeypatch.setattr(registry_module, "model_released", lambda model_id: "2026-01-01")
+
+
+def app_with(engines: dict, default: str, api_key=None, max_pending=4):
+    return create_app(Registry(default, engines), api_key, max_pending)
+
+
+def test_validation_errors_name_the_field():
+    with TestClient(app_with({"m": FakeEngine("m")}, "m")) as client:
+        response = client.post("/v1/systemone", json={"state": "x", "questions": {}})
+    assert response.status_code == 422
+    body = response.json()["error"]
+    assert body["code"] == "invalid_input" and body["param"] == "questions" and body["message"]
+
+
+def test_unknown_model_lists_what_the_server_answers_for():
+    with TestClient(app_with({"m": FakeEngine("m"), "tuned": FakeEngine("m")}, "m")) as client:
+        response = client.post("/v1/systemone", json={**PAYLOAD, "model": "nope"})
+    assert response.status_code == 404
+    body = response.json()["error"]
+    assert body == {"code": "unknown_model", "message": body["message"], "param": "model"}
+    assert "'m'" in body["message"] and "'tuned'" in body["message"]
+
+
+@pytest.mark.parametrize("failing, status, code", [
+    (InputTooLong("request is 9 tokens, over the maximum context length of 8"), 413, "payload_too_large"),
+    (ValueError("state contains the reserved split marker"), 422, "invalid_input"),
+    (HostUnavailable("jev is unavailable, returned 503"), 503, "upstream_unavailable"),
+])
+def test_engine_failures_map_to_codes(failing, status, code):
+    with TestClient(app_with({"m": FakeEngine("m", failing=failing)}, "m")) as client:
+        response = client.post("/v1/systemone", json=PAYLOAD)
+    assert response.status_code == status
+    assert response.json()["error"] == {"code": code, "message": str(failing)}
+
+
+def test_missing_key_is_unauthorized_in_the_same_shape():
+    with TestClient(app_with({"m": FakeEngine("m")}, "m", api_key="k")) as client:
+        assert client.get("/v1/models").json()["error"]["code"] == "unauthorized"
+        assert client.get("/v1/models", headers={"authorization": "Bearer k"}).status_code == 200
+
+
+def test_entries_answer_under_their_own_name_and_the_primary_under_the_engines():
+    with TestClient(app_with({"m": FakeEngine("m"), "tuned": FakeEngine("m")}, "m")) as client:
+        assert client.post("/v1/systemone", json={**PAYLOAD, "model": "tuned"}).json()["model"] == "tuned"
+        assert client.post("/v1/systemone", json={**PAYLOAD, "model": "default"}).json()["model"] == "m"
+        names = [m["name"] for m in client.get("/v1/models").json()["models"]]
+        assert names == ["m", "tuned"]
+
+
+def test_admission_counts_in_flight_requests_and_estimates_the_wait():
+    admission = Admission(2)
+    assert admission.enter() and admission.enter() and not admission.enter()
+    assert admission.retry_after() == 1
+    admission.leave(3.0)
+    assert admission.enter() and admission.retry_after() == 6
+    admission.leave(1.0)
+    admission.leave(1.0)
+    assert admission.pending == 0
+    with pytest.raises(ValueError):
+        Admission(0)
+
+
+def test_a_full_queue_turns_the_next_request_away_with_retry_after():
+    gate = threading.Event()
+    app = app_with({"m": FakeEngine("m", gate=gate)}, "m", max_pending=2)
+    statuses = {}
+
+    async def run():
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://t") as client:
+            async def post(i):
+                statuses[i] = await client.post("/v1/systemone", json=PAYLOAD)
+            async with anyio.create_task_group() as group:
+                for i in range(2):
+                    group.start_soon(post, i)
+                # Give the two admitted requests time to park in the engine; the third then finds the queue full.
+                await anyio.sleep(0.2)
+                statuses[2] = await client.post("/v1/systemone", json=PAYLOAD)
+                gate.set()
+
+    anyio.run(run)
+    assert statuses[2].status_code == 429
+    assert statuses[2].json()["error"]["code"] == "queue_full" and statuses[2].headers["retry-after"] == "1"
+    assert statuses[0].status_code == 200 and statuses[1].status_code == 200

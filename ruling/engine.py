@@ -13,6 +13,7 @@ orderings are averaged in log space.
 from __future__ import annotations
 
 import hashlib
+import json
 import threading
 from dataclasses import dataclass
 from datetime import date
@@ -22,8 +23,10 @@ import mlx.core as mx
 import numpy as np
 from huggingface_hub import HfApi, snapshot_download
 from huggingface_hub.errors import HfHubHTTPError, HFValidationError
+from mlx.utils import tree_flatten
 from mlx_lm import load
 from mlx_lm.models.cache import make_prompt_cache
+from mlx_lm.tuner.utils import linear_to_lora_layers
 
 from ruling.calibration import Calibration, Provenance, choice_confidence, log_softmax, score_confidence, softmax
 from ruling.codes import AnswerCodes
@@ -135,7 +138,26 @@ def adapter_digest(adapter: Path | None) -> str | None:
     """A short content hash of LoRA weights, so calibration and reports name the exact adapter."""
     if adapter is None:
         return None
-    return hashlib.sha256((adapter / "adapters.safetensors").read_bytes()).hexdigest()[:16]
+    return hashlib.sha256((adapter / ADAPTER_WEIGHTS).read_bytes()).hexdigest()[:16]
+
+
+ADAPTER_WEIGHTS = "adapters.safetensors"
+ADAPTER_CONFIG = "adapter_config.json"
+
+
+def lora_parameters(model) -> dict[str, mx.array]:
+    """Every LoRA weight in the model, keyed as mlx-lm saves and loads them."""
+    return {key: value for key, value in tree_flatten(model.parameters()) if key.rsplit(".", 1)[-1] in ("lora_a", "lora_b")}
+
+
+class _SharedModel:
+    """What engines built on one loaded model have in common: the lock that serializes the GPU,
+    the LoRA shape its layers were converted to, and which engine's weights are in them now."""
+
+    def __init__(self):
+        self.lock = threading.Lock()
+        self.lora: dict | None = None
+        self.active: "Engine | None" = None
 
 
 def model_released(model_id: str) -> str:
@@ -193,10 +215,65 @@ class Engine:
             self._pad_id = self.tokenizer.eos_token_id
         self._system_role = self._template_accepts_system_role()
         self.max_options = MAX_CHOICE_OPTIONS
-        self._lock = threading.Lock()
+        self._shared = _SharedModel()
+        self._shared.lora = json.loads((adapter / ADAPTER_CONFIG).read_text()) if adapter else None
+        self._shared.active = self
+        self._lock = self._shared.lock
+        # The weights to put into the shared LoRA layers before answering. None until another
+        # engine shares this model, since until then nothing can have swapped them out.
+        self._lora_weights: dict[str, mx.array] | None = None
+        self._adapter_path = adapter
         self._priors: dict[int, np.ndarray] = {}
         calibration.check(self.provenance)
         self.calibration = calibration
+
+    class IncompatibleAdapter(ValueError):
+        """The adapter's LoRA layout differs from the one the shared model was converted to."""
+
+    def variant(self, adapter: Path | None, calibration: Calibration) -> "Engine":
+        """Another engine on this loaded model with its own adapter (or none) and calibration.
+
+        The first variant converts the shared model's layers to LoRA in the adapter's
+        layout; every later adapter must match that layout exactly, since mlx-lm can
+        only load weights into layers of the same rank and depth. Weights are read and
+        realized here, on the loading thread, and merely rebound per request.
+        """
+        config = json.loads((adapter / ADAPTER_CONFIG).read_text()) if adapter else None
+        shared = self._shared
+        if shared.lora is None and config is not None:
+            linear_to_lora_layers(self.model, config["num_layers"], config["lora_parameters"])
+            shared.lora = config
+            # Fresh LoRA layers have zero `lora_b`, so these weights reproduce the plain base.
+            self._lora_weights = lora_parameters(self.model)
+            mx.eval(list(self._lora_weights.values()))
+        elif config is not None and config != shared.lora:
+            raise Engine.IncompatibleAdapter(
+                f"{adapter} has LoRA layout {config}, but the loaded {self.model_id} was converted for {shared.lora}")
+        if self._lora_weights is None and shared.lora is not None:
+            self._lora_weights = mx.load(str(self._adapter_path / ADAPTER_WEIGHTS))
+            mx.eval(list(self._lora_weights.values()))
+        other = Engine.__new__(Engine)
+        other.__dict__.update(self.__dict__)
+        other._priors = {}
+        other._adapter_path = adapter
+        other.adapter = adapter_digest(adapter)
+        if shared.lora is None:
+            other._lora_weights = None
+        elif adapter is None:
+            other._lora_weights = {key: mx.zeros_like(value) for key, value in lora_parameters(self.model).items()}
+            mx.eval(list(other._lora_weights.values()))
+        else:
+            other._lora_weights = mx.load(str(adapter / ADAPTER_WEIGHTS))
+            mx.eval(list(other._lora_weights.values()))
+        calibration.check(other.provenance)
+        other.calibration = calibration
+        return other
+
+    def _activate(self) -> None:
+        """Put this engine's LoRA weights into the shared layers; call with the lock held."""
+        if self._lora_weights is not None and self._shared.active is not self:
+            self.model.load_weights(list(self._lora_weights.items()), strict=False)
+            self._shared.active = self
 
     @property
     def provenance(self) -> Provenance:
@@ -281,6 +358,7 @@ class Engine:
 
         per_question: dict[str, dict[str, list[float]]] = {qid: {} for qid in questions}
         with self._lock:
+            self._activate()
             prefix_cache = self._encode_prefix(prefix_tokens)
             for chunk in self._chunks(passes, len(prefix_tokens)):
                 for one, logits in zip(chunk, self._forward_batch(prefix_cache, chunk)):

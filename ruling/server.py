@@ -1,114 +1,138 @@
-"""HTTP surface: one decision endpoint plus model listing, health, and a playground page."""
+"""HTTP surface: one decision endpoint over a registry of models, model listing, health, and a playground page."""
 
 from __future__ import annotations
 
 import logging
-import os
+import math
+import threading
 import time
-from dataclasses import replace
 from pathlib import Path
 
-from fastapi import Depends, FastAPI, HTTPException, Request
-from fastapi.responses import HTMLResponse
+from fastapi import Depends, FastAPI, Request
+from fastapi.concurrency import run_in_threadpool
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
-from dataclasses import replace
-
-from ruling.calibration import Calibration
-from ruling.cascade import CascadeEngine
-from ruling.failover import FailoverEngine
 from ruling.config import Settings
-from ruling.decision import DecisionEngine, is_checkpoint
-from ruling.engine import Engine, InputTooLong, model_released
-from ruling.against import API_KEY_ENV, BASE_URL_ENV, DEFAULT_BASE_URL
-from ruling.hosted import HOSTED_PREFIX, OPENROUTER_PREFIX, TYPESAFE_PREFIX, Budget, HostedEngine, HostUnavailable, OpenRouterEngine, TypeSafeEngine
-from ruling.questions import DEFAULT_MODEL_ALIASES, ModelInfo, ModelList, SystemOneRequest, SystemOneResponse
+from ruling.engine import InputTooLong
+from ruling.hosted import HostUnavailable
+from ruling.questions import ModelList, SystemOneRequest, SystemOneResponse
+from ruling.registry import Registry, UnknownModel
 
 log = logging.getLogger("ruling")
 PLAYGROUND = Path(__file__).with_name("playground.html")
 
-
-def build_engine(settings: Settings):
-    """Any OpenAI-compatible host, OpenRouter, a trained decision checkpoint, or a local decoder.
-
-    With `cascade_to` set, that model answers whichever questions the first one is
-    unsure about, judged against `cascade_threshold`. With `failover_to` set, that
-    model answers whenever the first one is unavailable.
-    """
-    if settings.failover_to:
-        primary = build_engine(replace(settings, failover_to=None))
-        fallback = build_engine(replace(settings, model=settings.failover_to, failover_to=None, cascade_to=None,
-                                        adapter_path=None, calibration_path=None))
-        return FailoverEngine(primary, fallback)
-    if settings.cascade_to:
-        if settings.cascade_threshold is None:
-            raise ValueError("set RULING_CASCADE_THRESHOLD, the top probability below which a question is escalated")
-        first = build_engine(replace(settings, cascade_to=None))
-        second = build_engine(replace(settings, model=settings.cascade_to, cascade_to=None, adapter_path=None,
-                                      calibration_path=None))
-        return CascadeEngine(first, second, settings.cascade_threshold)
-    calibration = Calibration.load(settings.calibration_path) if settings.calibration_path else Calibration()
-    if settings.model.startswith(TYPESAFE_PREFIX):
-        return TypeSafeEngine(settings.model, calibration, os.environ.get(BASE_URL_ENV, DEFAULT_BASE_URL),
-                              os.environ.get(API_KEY_ENV), settings.max_input_tokens, settings.max_branch_tokens)
-    if settings.model.startswith(HOSTED_PREFIX):
-        if not settings.openai_base_url:
-            raise ValueError("set RULING_OPENAI_BASE_URL to the endpoint serving the model, ending in /v1")
-        return HostedEngine(settings.model, calibration, settings.rotations, settings.openai_base_url,
-                            settings.openai_api_key, top_logprobs=settings.openai_top_logprobs,
-                            extra_body=settings.openai_extra_body)
-    if settings.model.startswith(OPENROUTER_PREFIX):
-        if not settings.openrouter_providers:
-            raise ValueError("set RULING_OPENROUTER_PROVIDERS to the hosts allowed to serve the model")
-        return OpenRouterEngine(settings.model, calibration, settings.rotations, list(settings.openrouter_providers),
-                                Budget(settings.openrouter_budget_usd))
-    if is_checkpoint(settings.model):
-        return DecisionEngine(Path(settings.model), calibration, settings.max_input_tokens)
-    return Engine(settings.model, calibration, settings.max_input_tokens, settings.rotations, settings.prior_debias,
-                  settings.adapter_path, settings.max_branch_tokens)
+# Weight of the latest request in the running estimate of how long one takes, which
+# sizes the Retry-After a turned-away client is given.
+LATENCY_SMOOTHING = 0.2
 
 
-def create_app(engine: Engine | DecisionEngine, api_key: str | None = None) -> FastAPI:
+class ApiError(Exception):
+    """An error in the hosted API's shape: a stable `code` for programs, a `message` for people."""
+
+    def __init__(self, status: int, code: str, message: str, param: str | None = None, retry_after: int | None = None):
+        super().__init__(message)
+        self.status, self.code, self.message, self.param, self.retry_after = status, code, message, param, retry_after
+
+    def response(self) -> JSONResponse:
+        error = {"code": self.code, "message": self.message}
+        if self.param is not None:
+            error["param"] = self.param
+        headers = {"Retry-After": str(self.retry_after)} if self.retry_after is not None else None
+        return JSONResponse({"error": error}, status_code=self.status, headers=headers)
+
+
+class Admission:
+    """How many requests may be in flight at once, and how long a refused one should wait."""
+
+    def __init__(self, limit: int):
+        if limit < 1:
+            raise ValueError("at least one request must be admitted")
+        self.limit = limit
+        self.pending = 0
+        self.seconds_per_request: float | None = None
+        self._lock = threading.Lock()
+
+    def enter(self) -> bool:
+        with self._lock:
+            if self.pending >= self.limit:
+                return False
+            self.pending += 1
+            return True
+
+    def leave(self, elapsed: float) -> None:
+        with self._lock:
+            self.pending -= 1
+            if self.seconds_per_request is None:
+                self.seconds_per_request = elapsed
+            else:
+                self.seconds_per_request += LATENCY_SMOOTHING * (elapsed - self.seconds_per_request)
+
+    def retry_after(self) -> int:
+        """Whole seconds until the queue has likely drained, never less than one."""
+        with self._lock:
+            estimate = self.pending * (self.seconds_per_request or 0.0)
+        return max(1, math.ceil(estimate))
+
+
+def create_app(registry: Registry, api_key: str | None, max_pending: int) -> FastAPI:
     app = FastAPI(title="ruling", version="0.2.0")
     bearer = HTTPBearer(auto_error=False)
+    admission = Admission(max_pending)
 
     def authorize(credentials: HTTPAuthorizationCredentials | None = Depends(bearer)) -> None:
         if api_key is None:
             return
         if credentials is None or credentials.credentials != api_key:
-            raise HTTPException(401, "invalid or missing bearer token")
+            raise ApiError(401, "unauthorized", "invalid or missing bearer token")
+
+    @app.exception_handler(ApiError)
+    async def api_error(request: Request, exc: ApiError) -> JSONResponse:
+        return exc.response()
+
+    @app.exception_handler(RequestValidationError)
+    async def invalid_request(request: Request, exc: RequestValidationError) -> JSONResponse:
+        first, *rest = exc.errors()
+        param = ".".join(str(part) for part in first["loc"][1:]) or None
+        message = first["msg"] + (f" (and {len(rest)} more)" if rest else "")
+        return ApiError(422, "invalid_input", message, param).response()
 
     @app.post("/v1/systemone", response_model=SystemOneResponse, dependencies=[Depends(authorize)])
-    def system_one(request: SystemOneRequest) -> SystemOneResponse:
-        if request.model not in (None, engine.model_id, *DEFAULT_MODEL_ALIASES):
-            raise HTTPException(404, f"unknown model {request.model!r}; loaded model is {engine.model_id!r}")
+    async def system_one(request: SystemOneRequest) -> SystemOneResponse:
+        try:
+            name, engine = registry.resolve(request.model)
+        except UnknownModel as exc:
+            raise ApiError(404, "unknown_model", str(exc), "model") from exc
+        if not admission.enter():
+            raise ApiError(429, "queue_full", f"{admission.limit} requests are already in flight",
+                           retry_after=admission.retry_after())
         started = time.perf_counter()
         try:
-            response = engine.evaluate(request)
+            response = await run_in_threadpool(engine.evaluate, request)
         except InputTooLong as exc:
-            raise HTTPException(413, str(exc)) from exc
+            raise ApiError(413, "payload_too_large", str(exc)) from exc
         except ValueError as exc:
-            raise HTTPException(400, str(exc)) from exc
+            raise ApiError(422, "invalid_input", str(exc)) from exc
         except HostUnavailable as exc:
-            raise HTTPException(503, str(exc)) from exc
-        log.info("systemone questions=%d input_tokens=%d ms=%.0f",
-                 len(request.questions), response.usage.input_tokens, (time.perf_counter() - started) * 1000)
-        return response
+            raise ApiError(503, "upstream_unavailable", str(exc)) from exc
+        finally:
+            elapsed = time.perf_counter() - started
+            admission.leave(elapsed)
+        log.info("systemone model=%s questions=%d input_tokens=%d ms=%.0f",
+                 name, len(request.questions), response.usage.input_tokens, elapsed * 1000)
+        # An entry answers under its own name; the primary keeps the engine's report, which a
+        # failover changes to say which side answered.
+        return response if name == registry.default else response.model_copy(update={"model": name})
 
     @app.get("/v1/models", response_model=ModelList, dependencies=[Depends(authorize)])
     def models() -> ModelList:
-        return ModelList(models=[ModelInfo(
-            name=engine.model_id,
-            description=f"{engine.model_id} answered by ruling over {engine.rotations} answer orderings",
-            release_date=model_released(engine.model_id),
-            id=engine.model_id, revision=engine.revision, adapter=engine.adapter,
-            max_input_tokens=engine.max_input_tokens, max_branch_tokens=engine.max_branch_tokens,
-            max_options=engine.max_options, rotations=engine.rotations, prior_debias=engine.prior_debias,
-        )])
+        return ModelList(models=registry.info())
 
     @app.get("/health")
     def health() -> dict[str, str | None]:
-        return {"status": "ok", "model": engine.model_id, "revision": engine.revision}
+        engine = registry.engines[registry.default]
+        return {"status": "ok", "model": registry.default, "revision": engine.revision}
 
     @app.get("/", response_class=HTMLResponse, include_in_schema=False)
     def playground(request: Request) -> str:
@@ -119,4 +143,4 @@ def create_app(engine: Engine | DecisionEngine, api_key: str | None = None) -> F
 
 def app_from_env() -> FastAPI:
     settings = Settings.from_env()
-    return create_app(build_engine(settings), settings.api_key)
+    return create_app(Registry.from_settings(settings), settings.api_key, settings.max_pending)

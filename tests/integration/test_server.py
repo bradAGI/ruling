@@ -9,6 +9,7 @@ from fastapi.testclient import TestClient
 
 from ruling.questions import Choice, Noul
 from ruling.sdk import RulingClient
+from ruling.registry import Registry
 from ruling.server import create_app
 
 pytestmark = pytest.mark.integration
@@ -26,7 +27,7 @@ PAYLOAD = {
 
 @pytest.fixture(scope="module")
 def app(engine):
-    return create_app(engine)
+    return create_app(Registry.single(engine), None, 4)
 
 
 def test_endpoint_returns_typed_answers(app, engine):
@@ -58,7 +59,8 @@ def test_models_and_playground(app, engine):
         page = client.get("/")
     assert body == {"models": [{"name": engine.model_id, "description": body["models"][0]["description"],
                                 "release_date": body["models"][0]["release_date"],
-                                "id": engine.model_id, "revision": engine.revision, "adapter": None,
+                                "id": engine.model_id, "base": engine.model_id, "revision": engine.revision,
+                                "adapter": None, "calibration": {},
                                 "max_input_tokens": 8192, "max_branch_tokens": engine.max_branch_tokens,
                                 "max_options": engine.max_options, "rotations": engine.rotations,
                                 "prior_debias": engine.prior_debias}]}
@@ -66,7 +68,7 @@ def test_models_and_playground(app, engine):
 
 
 def test_bearer_auth_when_configured(engine):
-    with TestClient(create_app(engine, api_key="s3cret")) as client:
+    with TestClient(create_app(Registry.single(engine), "s3cret", 4)) as client:
         assert client.get("/v1/models").status_code == 401
         assert client.get("/v1/models", headers={"authorization": "Bearer wrong"}).status_code == 401
         assert client.get("/v1/models", headers={"authorization": "Bearer s3cret"}).status_code == 200

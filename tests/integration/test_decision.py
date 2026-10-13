@@ -10,7 +10,8 @@ from ruling.config import Settings
 from ruling.decision import DecisionEngine, batch_inputs, load_model, pack
 from ruling.decision_train import DecisionTrainConfig, DecisionTrainer
 from ruling.questions import Choice, Noul, Score, SystemOneRequest
-from ruling.server import build_engine, create_app
+from ruling.registry import Registry, build_engine
+from ruling.server import create_app
 
 # Trains a model in a fixture: two minutes with a GPU, hours without one.
 pytestmark = [pytest.mark.integration, pytest.mark.heavy]
@@ -91,7 +92,7 @@ def test_checkpoint_serves_typed_answers_through_the_app(checkpoint, monkeypatch
     correct = sum(engine.evaluate(SystemOneRequest(state=r.state, questions=r.questions)).answers["decision"].choice == r.labels["decision"]
                   for r in held_out)
     assert correct >= 36
-    with TestClient(create_app(engine)) as client:
+    with TestClient(create_app(Registry.single(engine), None, 4)) as client:
         response = client.post("/v1/systemone", json={"state": "hello", "questions": {k: q.model_dump() for k, q in QUESTIONS.items()}})
         models = client.get("/v1/models").json()
     body = response.json()

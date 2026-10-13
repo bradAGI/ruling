@@ -79,6 +79,12 @@ questions the primary is unsure about, and is set separately with
 Any of these can also be the secondary. The other settings — token limits, API
 key, calibration, logprob caps — are in [docs/reference.md](docs/reference.md#install-and-run).
 
+One process can also serve several models by name — a plain base, a tuned
+adapter per decision, a large model for escalation — and adapters on the same
+base share one copy of its weights. Put them in a JSON file and set
+`RULING_MODELS`; requests pick one with `model`, and `GET /v1/models` lists
+them. Details in [docs/reference.md](docs/reference.md#serve-several-models).
+
 ## Make it yours: fine-tune on your own decisions
 
 The probabilities a stock model gives are usually right but often
@@ -266,7 +272,7 @@ and the confidence formulas, is in [docs/reference.md](docs/reference.md#how-it-
 
 ```
 ruling/            the package: engine.py (MLX scoring), hosted.py (OpenAI-compatible endpoints),
-                   cascade.py, calibration.py, evals.py, train.py, server.py, cli.py, sdk.py
+                   cascade.py, calibration.py, evals.py, train.py, registry.py, server.py, cli.py, sdk.py
 sdks/typescript/   zero-dependency JS client with TypeScript types
 datasets/          labeled JSONL fixtures and the record format
 docs/              reference.md (settings, API, clients), measurements.md (the full record),

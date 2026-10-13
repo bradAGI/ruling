@@ -20,7 +20,8 @@ from ruling.engine import Engine
 from ruling.evals import collect, fit, load_dataset, report, write_json, write_predictions
 from ruling.questions import Choice, Noul, Score, SystemOneRequest
 from ruling.hosted import OpenRouterEngine
-from ruling.server import app_from_env, build_engine
+from ruling.registry import build_engine
+from ruling.server import app_from_env
 
 
 def bundled_evaluations() -> list[Path]:

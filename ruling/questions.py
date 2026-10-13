@@ -129,14 +129,17 @@ class SystemOneResponse(BaseModel):
 
 class ModelInfo(BaseModel):
     """One served model. `name`, `description` and `release_date` are what the hosted
-    API reports and what its SDK decodes; the rest is detail only a local engine has."""
+    API reports and what its SDK decodes; the rest is detail only a local engine has.
+    `name` is what a request sends as `model`; `base` is the weights behind it."""
 
     name: str
     description: str
     release_date: str
     id: str
+    base: str
     revision: str | None
     adapter: str | None
+    calibration: dict[str, float]
     max_input_tokens: int
     max_branch_tokens: int
     max_options: int

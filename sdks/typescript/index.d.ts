@@ -19,15 +19,18 @@ export interface SystemOneResponse<Q extends Record<string, Question>> {
 
 export interface ModelInfo {
   name: string; description: string; release_date: string;
-  id: string; revision: string | null; max_input_tokens: number; max_branch_tokens: number;
+  id: string; base: string; revision: string | null; adapter: string | null;
+  calibration: Record<string, number>; max_input_tokens: number; max_branch_tokens: number;
   max_options: number; rotations: number; prior_debias: boolean;
 }
+
+export interface ApiError { code: string; message: string; param?: string }
 
 export function choice(instructions: Text, criteria: Record<string, Text | null>): Choice;
 export function score(instructions: Text, criteria: Text[]): Score;
 export function noul(instructions: Text): Noul;
 
-export class RulingError extends Error { status: number; detail: unknown }
+export class RulingError extends Error { status: number; detail: ApiError | unknown }
 
 export class RulingClient {
   constructor(options?: { baseUrl?: string; apiKey?: string; fetch?: typeof fetch });

@@ -64,6 +64,8 @@ class Settings:
     openai_extra_body: dict = field(default_factory=dict)
     openrouter_providers: tuple[str, ...] = ()
     openrouter_budget_usd: float = 1.0
+    models_path: Path | None = None
+    max_pending: int = 64
     host: str = "127.0.0.1"
     port: int = 8010
 
@@ -72,6 +74,7 @@ class Settings:
         env = os.environ
         calibration = env.get("RULING_CALIBRATION")
         adapter = env.get("RULING_ADAPTER")
+        models = env.get("RULING_MODELS")
         return cls(
             model=env.get("RULING_MODEL", DEFAULT_MODEL),
             calibration_path=Path(calibration) if calibration else None,
@@ -92,6 +95,8 @@ class Settings:
             openai_extra_body=json.loads(env.get("RULING_OPENAI_EXTRA_BODY", "{}")),
             openrouter_providers=tuple(p for p in env.get("RULING_OPENROUTER_PROVIDERS", "").split(",") if p),
             openrouter_budget_usd=float(env.get("RULING_OPENROUTER_BUDGET_USD", cls.openrouter_budget_usd)),
+            models_path=Path(models) if models else None,
+            max_pending=int(env.get("RULING_MAX_PENDING", cls.max_pending)),
             host=env.get("RULING_HOST", cls.host),
             port=int(env.get("RULING_PORT", cls.port)),
         )

@@ -11,6 +11,7 @@ from ruling.engine import RawScore, Scored
 from ruling.failover import FailoverEngine
 from ruling.hosted import TYPESAFE_PREFIX, HostUnavailable, TypeSafeEngine
 from ruling.questions import Choice, Noul, SystemOneRequest
+from ruling.registry import Registry
 from ruling.server import create_app
 
 QUESTIONS = {
@@ -120,8 +121,8 @@ def test_failover_raises_when_both_are_down():
 
 
 def test_server_reports_an_unavailable_host_as_503():
-    app = create_app(FakeEngine("jev", top=6.0, failing=HostUnavailable("overloaded")))
+    app = create_app(Registry.single(FakeEngine("jev", top=6.0, failing=HostUnavailable("overloaded"))), None, 4)
     with TestClient(app) as client:
         response = client.post("/v1/systemone", json={"state": "s", "questions": {
             "refund": {"type": "noul", "instructions": "A refund is requested."}}})
-    assert response.status_code == 503 and "overloaded" in response.json()["detail"]
+    assert response.status_code == 503 and "overloaded" in response.json()["error"]["message"]

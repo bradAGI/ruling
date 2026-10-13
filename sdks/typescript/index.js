@@ -24,7 +24,7 @@ export class RulingClient {
     if (this.apiKey) headers.authorization = `Bearer ${this.apiKey}`;
     const response = await this.fetch(`${this.baseUrl}${path}`, { method, headers, body: body && JSON.stringify(body) });
     const data = await response.json();
-    if (!response.ok) throw new RulingError(response.status, data.detail ?? data);
+    if (!response.ok) throw new RulingError(response.status, data.error ?? data);
     return data;
   }
 
