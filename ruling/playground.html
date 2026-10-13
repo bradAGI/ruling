@@ -42,11 +42,24 @@
   "refund": {"type": "noul", "instructions": "The customer asks for a refund."}
 }</textarea>
   </div>
+  <div>
+    <label for="model">model</label>
+    <select id="model"></select>
+  </div>
   <button id="run">Decide</button>
   <div id="out"></div>
 </main>
 <script>
 const out = document.getElementById("out");
+const model = document.getElementById("model");
+fetch("/v1/models").then(r => r.json()).then(data => {
+  for (const m of data.models) {
+    const option = document.createElement("option");
+    option.value = m.name;
+    option.textContent = m.adapter ? `${m.name} (${m.base} + adapter ${m.adapter})` : m.name === m.base ? m.name : `${m.name} (${m.base})`;
+    model.appendChild(option);
+  }
+}).catch(e => { out.innerHTML = `<div class="err">could not list models: ${e.message}</div>`; });
 function parseState(text) { try { return JSON.parse(text); } catch { return text; } }
 function bar(label, p) {
   return `<div class="row"><span>${label}</span><div class="bar"><i style="width:${(p * 100).toFixed(1)}%"></i></div><span>${p.toFixed(3)}</span></div>`;
@@ -56,12 +69,12 @@ document.getElementById("run").onclick = async () => {
   let questions;
   try { questions = JSON.parse(document.getElementById("questions").value); }
   catch (e) { out.innerHTML = `<div class="err">questions is not valid JSON: ${e.message}</div>`; return; }
-  const body = { state: parseState(document.getElementById("state").value), questions };
+  const body = { model: model.value, state: parseState(document.getElementById("state").value), questions };
   const started = performance.now();
   const res = await fetch("/v1/systemone", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
   const ms = Math.round(performance.now() - started);
   const data = await res.json();
-  if (!res.ok) { out.innerHTML = `<div class="err">${res.status}: ${JSON.stringify(data.detail)}</div>`; return; }
+  if (!res.ok) { out.innerHTML = `<div class="err">${res.status} ${data.error.code}: ${data.error.message}</div>`; return; }
   let html = `<div class="meta">${data.model} · ${data.usage.input_tokens} input tokens · ${ms} ms</div>`;
   for (const [id, a] of Object.entries(data.answers)) {
     html += `<div class="q"><b>${id} <span class="meta">${a.type}</span></b>`;

@@ -65,6 +65,8 @@ def test_models_and_playground(app, engine):
                                 "max_options": engine.max_options, "rotations": engine.rotations,
                                 "prior_debias": engine.prior_debias}]}
     assert page.status_code == 200 and "/v1/systemone" in page.text
+    # The page lists the registry and sends the picked name; a stale page would still post with no model.
+    assert "/v1/models" in page.text and 'id="model"' in page.text and "model: model.value" in page.text
 
 
 def test_bearer_auth_when_configured(engine):
