@@ -74,6 +74,66 @@ as r=3.
 accuracy; its latency is a vendor range, 70 to 500 ms, so it is drawn as a line
 rather than a point.*
 
+### Other open decision models, run locally
+
+Four more trained decision models from the Hub, each run through its
+publisher's own inference code (or, for the 27B, the community MLX port of
+it) as a `/v1/systemone` server on the same Mac, and scored by `ruling eval`
+with `--model typesafe:<name>` exactly as Clef-flash was: one ordering,
+temperature 1.0, prior debiasing off, the host's own probabilities passed
+through. Run on 13 October 2026 at ruling commit `e812c7c`, one model loaded
+at a time; everything the harness wrote is under `runs/bench/`
+(`serve.sh` starts a server, `score.sh` scores it, `summary.py` prints the
+numbers below from the result JSON).
+
+| model | how it was run | weights |
+|---|---|---|
+| pplx-decider-v1.1-27b, Perplexity | `mlx-community/pplx-decider-v1.1-27b-4bit` at `66383f28`: the port's `server.py`, which implements the publisher's noncausal full-attention layers, 255-row readout head and saved calibration temperature 1.00874 (the port reports 33 of 33 argmax agreements and mean KL 0.0014 against the publisher's PyTorch bf16 code; the backbone is 4-bit, the readout bf16) | 15.3 GB |
+| decider-4b v2.1, Mapika | `Mapika/decider-4b` at `99d7fd5b` through the publisher's `decider-ai` 1.9.0 (`uvicorn decider.serve:app`), on PyTorch MPS in float16, the package's own Apple Silicon default; per-type temperatures from its `decider_config.json` (choice 1.11, noul 1.56, score 1.287) | 8.4 GB bf16 |
+| decider-2b v11, Mapika | `Mapika/decider-2b` at `ff99089b`, the same package and device; temperatures choice 1.164, noul 1.624, score 1.124 | 3.8 GB bf16 |
+| bev-decider-0.4B, avbiswas | `avbiswas/bev-decider-0.4B` at `cf5138b5` through the publisher's `bev-decider` 0.2.1 (`bev-decider serve`), MPS, bf16, the package's 2,048-token state limit (longer states are truncated by the package, silently) | 1.0 GB |
+
+Two publisher limits shape the TypeSafe column. pplx-decider rejects any
+prompt over 8,192 tokens rather than truncating it, in the publisher's
+reference code and in the port; 13 of TypeSafe's 102 rows are longer than
+that, so it was scored on the 89 it could read (the harness records the rest
+as unscored; `assets/bench/proxy413.py` only turns the server's HTTP 400 for
+that rejection into the 413 the harness expects, and touches nothing else).
+bev-decider truncates states to 2,048 tokens, which affects 47 of those 102
+rows.
+
+Accuracy, as argmax agreement with each set's own reference labels, then
+coverage at a 5% error budget, all question types pooled, as in the README:
+
+| model | typesafe102 (102) | authored144 (144) | perturbations108 (108) | Every (154) |
+|---|---|---|---|---|
+| pplx-decider-v1.1-27b, 4-bit MLX port | 0.899 (80/89 read; 13 rows over its 8,192-token limit, 0.784 of 102 if they count as wrong) | 0.965 (139/144) | 1.000 (108/108) | 0.955 (147/154) |
+| decider-4b v2.1 | 0.814 (83/102) | 0.910 (131/144) | 0.880 (95/108) | 0.942 (145/154) |
+| decider-2b v11 | 0.755 (77/102) | 0.868 (125/144) | 0.917 (99/108) | 0.935 (144/154) |
+| bev-decider-0.4B | 0.627 (64/102) | 0.681 (98/144) | 0.657 (71/108) | 0.877 (135/154) |
+| Clef-flash 9B, 4-bit MLX port, from above | 0.892 (91/102) | 0.903 | 0.954 | 0.955 |
+
+| coverage at 5% error | typesafe102 | authored144 | perturbations108 | Every |
+|---|---|---|---|---|
+| pplx-decider-v1.1-27b, 4-bit MLX port | 0.854 (the 89 rows read) | 1.000 | 1.000 | 1.000 |
+| decider-4b v2.1 | 0.588 | 0.896 | 0.815 | 0.987 |
+| decider-2b v11 | 0.294 | 0.715 | 0.787 | 0.935 |
+| bev-decider-0.4B | 0.020 | 0.340 | 0.000 | 0.669 |
+| Clef-flash 9B, 4-bit MLX port, from above | 0.843 | 0.764 | 1.000 | 1.000 |
+
+Two of these numbers can be checked against the publishers' own cards.
+decider-2b's card reports 75.5% on the same 102 TypeSafe rows; this run got
+77 of 102, the same number. Its card also gives JevBench public tiers of
+1.000 / 0.889 / 0.577; below, this run has 1.000 / 0.889 / 0.568, one hard
+item apart, on float16 MPS against the card's bf16 CUDA.
+
+Latency through each server, one request at a time, median per record:
+pplx-decider 862 ms on Every's rows and 3,598 ms on TypeSafe's long
+states (the port prefilled 682,860 tokens in 1,096 GPU-seconds over the whole
+run, about 620 tokens per second, from its `/stats`); decider-4b 161 ms and 1,143 ms; decider-2b 86 ms and 499 ms;
+bev-decider 25 ms and 104 ms. The two Mapika models run eager on MPS, where
+the package captures no graphs.
+
 ### What ordering averaging buys
 
 ![Accuracy against the number of option orderings averaged, for four models on four held-out sets](../assets/rotations.png)
@@ -273,6 +333,10 @@ other rows are the operator's published per-task outcomes on the same items.
 | SemIf, Qwen3.5-4B | 0.810 | 1.000 | 0.986 | 0.613 |
 | Bespoke Nimble 9B | 0.797 | 1.000 | 0.931 | 0.622 |
 | system-one-open, Gemma 4 E2B | 0.732 | 1.000 | 0.931 | 0.486 |
+| pplx-decider-v1.1-27b, 4-bit MLX port, local | 0.892 | 1.000 | 1.000 | 0.775 |
+| decider-4b v2.1, local | 0.831 | 1.000 | 0.986 | 0.658 |
+| decider-2b v11, local | 0.758 | 1.000 | 0.889 | 0.568 |
+| bev-decider-0.4B, local | 0.632 | 0.979 | 0.736 | 0.414 |
 
 Two of Jev's 231 decisions separate it from ruling, both on the original 72;
 on the 111 hard items, the long policy texts and multi-step reasoning where
@@ -284,7 +348,15 @@ reasoning more than the TypeSafe and Every rows do, and a general model with
 a little reasoning budget is out of reach for any one-pass readout here.
 
 Clef-flash was run the same way, against the community MLX port's own
-`/v1/systemone` server, unmodified. It is level with Jev on TypeSafe's and
+`/v1/systemone` server, unmodified. The four rows marked local below it were
+run the same way again on 13 October 2026, each against its own server as
+described under [Other open decision models](#other-open-decision-models-run-locally),
+with the harness's `typesafe` adapter pointed at `127.0.0.1`
+(`assets/bench/score.sh`; per-item results under `runs/bench/jevbench-<name>/`).
+pplx-decider leads every row here, open or hosted, except the instruction
+model at the top: 206 of 231, with all 72 original items and 86 of the 111
+hard ones against 81 for Jev and the 35B. bev-decider's card reports 46.8 on the hard tier where this run has 41.4
+(46 of 111 against 52); its easy and original tiers match the card exactly. It is level with Jev on TypeSafe's and
 Every's rows but drops on the hard tier: 67 of 111, against 81 for both Jev
 and the 35B.
 
