@@ -2,6 +2,7 @@ import json
 import os
 from pathlib import Path
 
+import mlx.core as mx
 import numpy as np
 import pytest
 
@@ -113,3 +114,58 @@ def test_hosted_teacher_answers_resume_where_they_stopped(tmp_path, monkeypatch,
         assert abs(sum(record.references["tone"]["target"].values()) - 1.0) < 1e-6
     main(["build-corpus", "answers", "--questions", str(questions), "--output", str(answers), "--teacher", "typesafe"])
     assert len(load_dataset(answers)) == 3
+
+
+@pytest.fixture(scope="module")
+def small_data(tmp_path_factory):
+    data = tmp_path_factory.mktemp("resume") / "states.jsonl"
+    write([r.model_dump(mode="json") for r in states.generate(60, seed=5)], data)
+    return data
+
+
+def _small_run(model, data, output, **overrides):
+    """A few steps on the small test model: the same settings as a TrainConfig and as `ruling train` arguments."""
+    settings = {"steps": 6, "batch_size": 2, "warmup": 2, "max_tokens": 256, "eval_every": 3, "valid_examples": 8,
+                "valid_fraction": 0.2, "lora_layers": 2, "seed": 0, **overrides}
+    args = ["train", "--data", str(data), "--output", str(output), "--holdout", "--model", model]
+    for name, value in settings.items():
+        args += [f"--{name.replace('_', '-')}", str(value)]
+    return TrainConfig(model=model, data=[data], output=output, holdout=[], **settings), args
+
+
+def test_resumed_run_matches_an_uninterrupted_one_bit_for_bit(small_data, test_model, tmp_path):
+    from ruling.cli import main
+
+    whole, _ = _small_run(test_model, small_data, tmp_path / "whole")
+    expected = Trainer(whole).run(log=lambda _: None)
+    _, first_half = _small_run(test_model, small_data, tmp_path / "split", steps=3)
+    main(first_half)
+    assert json.loads((tmp_path / "split" / "checkpoint" / "state.json").read_text())["step"] == 3
+    _, second_half = _small_run(test_model, small_data, tmp_path / "split")
+    with pytest.raises(ValueError, match="different learning_rate"):
+        main(second_half + ["--learning-rate", "2e-5", "--resume"])
+    main(second_half + ["--resume"])
+
+    resumed = json.loads((tmp_path / "split" / "checkpoint" / "state.json").read_text())
+    assert [entry["step"] for entry in resumed["history"]] == [0, 3, 6]
+    assert resumed["history"][-1] == expected[-1] | {"tokens_per_second": resumed["history"][-1]["tokens_per_second"]}
+    uninterrupted = json.loads((tmp_path / "whole" / "checkpoint" / "state.json").read_text())
+    assert resumed["tokens_seen"] == uninterrupted["tokens_seen"] and resumed["stream"] == uninterrupted["stream"]
+    for name in ("adapters", "optimizer"):
+        theirs = mx.load(str(tmp_path / "whole" / "checkpoint" / f"{name}.safetensors"))
+        ours = mx.load(str(tmp_path / "split" / "checkpoint" / f"{name}.safetensors"))
+        assert set(ours) == set(theirs)
+        for key in theirs:
+            assert np.array_equal(np.array(ours[key]), np.array(theirs[key])), key
+
+
+def test_from_adapter_starts_where_the_source_adapter_stands(small_data, test_model, tmp_path):
+    source, _ = _small_run(test_model, small_data, tmp_path / "source", steps=3)
+    best = min(Trainer(source).run(log=lambda _: None), key=lambda entry: entry["loss"])
+    seeded, _ = _small_run(test_model, small_data, tmp_path / "seeded", steps=3, from_adapter=tmp_path / "source")
+    history = Trainer(seeded).run(log=lambda _: None)
+    assert history[0]["loss"] == best["loss"] and history[0]["accuracy"] == best["accuracy"]
+    assert json.loads((tmp_path / "seeded" / "training.json").read_text())["config"]["from_adapter"] == str(tmp_path / "source")
+    mismatched, _ = _small_run(test_model, small_data, tmp_path / "mismatched", lora_rank=4, from_adapter=tmp_path / "source")
+    with pytest.raises(ValueError, match="not the requested"):
+        Trainer(mismatched)

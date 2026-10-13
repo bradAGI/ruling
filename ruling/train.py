@@ -42,17 +42,15 @@ import mlx.core as mx
 import mlx.nn as nn
 import mlx.optimizers as optim
 import numpy as np
-from mlx.utils import tree_flatten
+from mlx.utils import tree_flatten, tree_unflatten
 from mlx_lm.tuner.trainer import grad_checkpoint
 from mlx_lm.tuner.utils import linear_to_lora_layers
 
 from ruling.calibration import Calibration, coverage_at_error, expected_calibration_error
 from ruling.engine import Engine, option_logits
-from ruling.evals import Record, label_index, load_dataset
+from ruling.evals import TARGET, Record, label_index, load_dataset
 from ruling.prompt import render_question
 from ruling.questions import Choice, Noul, Score, option_keys, render_text
-
-TARGET = "target"
 
 
 @dataclass(frozen=True)
@@ -80,12 +78,20 @@ class TrainConfig:
     brier_weight: float = 0.0
     ranking_weight: float = 0.0
     ranking_margin: float = 0.05
+    from_adapter: Path | None = None
+
+
+CHECKPOINT = "checkpoint"
+# Rendering happens in chunks of this many batches, which are then sorted by length and cut into batches.
+CHUNK_BATCHES = 64
 
 
 @dataclass(frozen=True)
 class Example:
     record: int
     question_id: str
+    weight: float
+    """The record's weight: its share of a batch's update relative to the other rows."""
 
 
 def target_vector(record: Record, question_id: str) -> dict[str, float] | None:
@@ -110,19 +116,28 @@ def permuted(question: Choice | Score | Noul, rng: np.random.Generator) -> tuple
 
 
 def objective(log_probs: mx.array, mask: mx.array, targets: mx.array, label_smoothing: float = 0.0,
-              brier_weight: float = 0.0, ranking_weight: float = 0.0, ranking_margin: float = 0.05) -> mx.array:
+              brier_weight: float = 0.0, ranking_weight: float = 0.0, ranking_margin: float = 0.05,
+              weights: mx.array | None = None) -> mx.array:
     """Cross-entropy against the (optionally smoothed) target, plus the optional Brier and ranking terms.
 
-    With every weight at zero this is exactly the original soft-target cross-entropy.
+    Rows are averaged by `weights` (one per row, summing to more than zero; uniform when None), so the update
+    is the weighted mean of the batch. With every term off this is exactly the original soft-target
+    cross-entropy. The ranking term compares rows pairwise and takes no weights.
     """
+    if weights is None:
+        weights = mx.ones(log_probs.shape[0])
+
+    def weighted_mean(per_row: mx.array) -> mx.array:
+        return (weights * per_row).sum() / weights.sum()
+
     options = mask.sum(axis=-1, keepdims=True).astype(mx.float32)
     smoothed = (1.0 - label_smoothing) * targets + mx.where(mask, label_smoothing / options, 0.0)
-    total = -mx.where(mask, smoothed * log_probs, 0.0).sum(axis=-1).mean()
+    total = weighted_mean(-mx.where(mask, smoothed * log_probs, 0.0).sum(axis=-1))
     if brier_weight == 0.0 and ranking_weight == 0.0:
         return total
     probs = mx.where(mask, mx.exp(log_probs), 0.0)
     if brier_weight:
-        total = total + brier_weight * ((probs - targets) ** 2).sum(axis=-1).mean()
+        total = total + brier_weight * weighted_mean(((probs - targets) ** 2).sum(axis=-1))
     if ranking_weight:
         confidence = probs.max(axis=-1)
         right = mx.stop_gradient((probs.argmax(axis=-1) == targets.argmax(axis=-1)).astype(mx.float32))
@@ -152,9 +167,93 @@ def _state_key(state) -> str:
     return " ".join(render_text(state).split())
 
 
+def config_json(config: TrainConfig) -> dict:
+    """The config as JSON-ready values, paths as strings."""
+    return {**asdict(config), "data": [str(p) for p in config.data], "holdout": [str(p) for p in config.holdout],
+            "output": str(config.output), "from_adapter": None if config.from_adapter is None else str(config.from_adapter)}
+
+
+def config_mismatch(saved: dict, requested: dict) -> list[str]:
+    """The fields a resumed run would change, other than `steps`, which may be raised to continue a finished run."""
+    return sorted(k for k in set(saved) | set(requested) if k != "steps" and saved.get(k) != requested.get(k))
+
+
+def save_checkpoint(directory: Path, weights: dict[str, mx.array], optimizer_state: dict, state: dict) -> None:
+    """Everything a run needs to continue from its next step: LoRA weights, optimizer state and the trainer's bookkeeping."""
+    directory.mkdir(parents=True, exist_ok=True)
+    mx.save_safetensors(str(directory / "adapters.safetensors"), weights)
+    mx.save_safetensors(str(directory / "optimizer.safetensors"), dict(tree_flatten(optimizer_state)))
+    (directory / "state.json").write_text(json.dumps(state, indent=2) + "\n")
+
+
+def load_checkpoint(directory: Path) -> tuple[dict[str, mx.array], dict, dict]:
+    if not (directory / "state.json").exists():
+        raise FileNotFoundError(f"no checkpoint to resume in {directory}")
+    weights = dict(mx.load(str(directory / "adapters.safetensors")))
+    optimizer_state = tree_unflatten(list(mx.load(str(directory / "optimizer.safetensors")).items()))
+    return weights, optimizer_state, json.loads((directory / "state.json").read_text())
+
+
+class BatchStream:
+    """Endless shuffled batches, grouped by length to limit padding, resumable to the exact batch.
+
+    An epoch is one permutation of the examples, rendered a chunk at a time; each chunk is sorted by length, cut into
+    batches, and the batches shuffled. Augmentation draws from the same generator, so the generator's state at the
+    start of the epoch and of the current chunk, with the chunk's offset and how many of its batches went out,
+    determine every later batch exactly.
+    """
+
+    def __init__(self, count: int, size: int, rng: np.random.Generator, render, batch):
+        self.count, self.size, self.rng, self.render, self.batch = count, size, rng, render, batch
+        self.order = None
+        self.epoch_rng = self.chunk_rng = None
+        self.start = self.cursor = 0
+        self.batches = []
+
+    def __next__(self):
+        while self.cursor >= len(self.batches):
+            width = self.size * CHUNK_BATCHES
+            if self.order is None or self.start + width >= len(self.order):
+                self.epoch_rng = self.rng.bit_generator.state
+                self.order = self.rng.permutation(self.count)
+                self.start = 0
+            else:
+                self.start += width
+            self.chunk_rng = self.rng.bit_generator.state
+            self._render_chunk()
+        batch = self.batches[self.cursor]
+        self.cursor += 1
+        return batch
+
+    def _render_chunk(self) -> None:
+        chunk = [self.render(i) for i in self.order[self.start:self.start + self.size * CHUNK_BATCHES]]
+        chunk = sorted((c for c in chunk if c is not None), key=lambda c: len(c[0]))
+        groups = [chunk[i:i + self.size] for i in range(0, len(chunk) - self.size + 1, self.size)]
+        self.batches = [self.batch(groups[g]) for g in self.rng.permutation(len(groups))]
+        self.cursor = 0
+
+    def state(self) -> dict:
+        return {"epoch_rng": self.epoch_rng, "chunk_rng": self.chunk_rng, "start": self.start, "cursor": self.cursor}
+
+    def restore(self, state: dict) -> None:
+        self.epoch_rng, self.chunk_rng, self.start = state["epoch_rng"], state["chunk_rng"], state["start"]
+        self.rng.bit_generator.state = self.epoch_rng
+        self.order = self.rng.permutation(self.count)
+        self.rng.bit_generator.state = self.chunk_rng
+        self._render_chunk()
+        self.cursor = state["cursor"]
+
+
 class Trainer:
-    def __init__(self, config: TrainConfig):
+    def __init__(self, config: TrainConfig, resume: bool = False):
         self.config = config
+        self.checkpoint = None
+        if resume:
+            self.checkpoint = load_checkpoint(config.output / CHECKPOINT)
+            _, _, state = self.checkpoint
+            mismatch = config_mismatch(state["config"], config_json(config))
+            if mismatch:
+                raise ValueError(f"cannot resume {config.output}: the checkpoint was trained with different {', '.join(mismatch)}")
         self.rng = np.random.default_rng(config.seed)
         records = [r for path in config.data for r in load_dataset(path)]
         held_out = [r for path in config.holdout for r in load_dataset(path)]
@@ -163,15 +262,20 @@ class Trainer:
             raise ValueError(f"{overlap} training states also appear in held-out evaluation data")
         self.train_records, self.valid_records = split_records(records, config.valid_fraction)
 
+        self.lora = {"rank": config.lora_rank, "scale": config.lora_scale, "dropout": config.lora_dropout}
+        if config.from_adapter is not None:
+            self._check_adapter(config.from_adapter)
+
         mx.random.seed(config.seed)
         self.engine = Engine(config.model, Calibration(), config.max_tokens, rotations=1, prior_debias=False)
         model = self.engine.model
         model.freeze()
-        lora = {"rank": config.lora_rank, "scale": config.lora_scale, "dropout": config.lora_dropout}
-        linear_to_lora_layers(model, config.lora_layers, lora)
+        linear_to_lora_layers(model, config.lora_layers, self.lora)
         if config.grad_checkpoint:
             grad_checkpoint(model.layers[0])
-        self.lora = lora
+        if config.from_adapter is not None:
+            model.load_weights(str(config.from_adapter / "adapters.safetensors"), strict=False)
+            mx.eval(model.parameters())
 
         self.train_examples = self._examples(self.train_records)
         valid = self._examples(self.valid_records)
@@ -179,16 +283,26 @@ class Trainer:
         if not self.train_examples or not self.valid_examples:
             raise ValueError("training and validation both need labeled questions")
 
+    def _check_adapter(self, adapter: Path) -> None:
+        """An adapter to start from must have been trained with the requested LoRA settings, or its weights fit nothing."""
+        saved = json.loads((adapter / "adapter_config.json").read_text())
+        wanted = {"fine_tune_type": "lora", "num_layers": self.config.lora_layers, "lora_parameters": self.lora}
+        if saved != wanted:
+            raise ValueError(f"{adapter} was trained with {saved}, not the requested {wanted}")
+
     def _examples(self, records: list[Record]) -> list[Example]:
+        """One example per labeled question the model can answer; a weightless record would not move the update."""
         examples = []
         for index, record in enumerate(records):
+            if record.weight == 0:
+                continue
             for qid, question in record.questions.items():
                 cardinality = len(option_keys(question))
                 if cardinality <= self.engine.codes.max_options and target_vector(record, qid) is not None:
-                    examples.append(Example(index, qid))
+                    examples.append(Example(index, qid, record.weight))
         return examples
 
-    def _render(self, records: list[Record], example: Example, augment: bool) -> tuple[list[int], list[float]] | None:
+    def _render(self, records: list[Record], example: Example, augment: bool) -> tuple[list[int], list[float], float] | None:
         record = records[example.record]
         question = record.questions[example.question_id]
         presented, rotation = permuted(question, self.rng) if augment else (question, 0)
@@ -198,41 +312,34 @@ class Trainer:
         if len(tokens) > self.config.max_tokens:
             return None
         target = target_vector(record, example.question_id)
-        return tokens, [target[key] for key in rendered.keys]
+        return tokens, [target[key] for key in rendered.keys], example.weight
 
-    def _batch(self, rendered: list[tuple[list[int], list[float]]]):
-        width = math.ceil(max(len(t) for t, _ in rendered) / 32) * 32
-        options = max(len(target) for _, target in rendered)
+    def _batch(self, rendered: list[tuple[list[int], list[float], float]]):
+        width = math.ceil(max(len(t) for t, _, _ in rendered) / 32) * 32
+        options = max(len(target) for _, target, _ in rendered)
         pad = self.engine._pad_id
-        tokens = mx.array([t + [pad] * (width - len(t)) for t, _ in rendered])
-        last = mx.array([len(t) - 1 for t, _ in rendered])
+        tokens = mx.array([t + [pad] * (width - len(t)) for t, _, _ in rendered])
+        last = mx.array([len(t) - 1 for t, _, _ in rendered])
         ids = mx.array([self.engine.codes.token_ids[:options] for _ in rendered])
-        mask = mx.array([[i < len(target) for i in range(options)] for _, target in rendered])
-        targets = mx.array([target + [0.0] * (options - len(target)) for _, target in rendered], dtype=mx.float32)
-        return tokens, last, ids, mask, targets
+        mask = mx.array([[i < len(target) for i in range(options)] for _, target, _ in rendered])
+        targets = mx.array([target + [0.0] * (options - len(target)) for _, target, _ in rendered], dtype=mx.float32)
+        weights = mx.array([weight for _, _, weight in rendered], dtype=mx.float32)
+        return tokens, last, ids, mask, targets, weights
 
     @staticmethod
     def _log_probs(model, tokens, last, ids, mask):
         logits = mx.where(mask, option_logits(model, tokens, None, last, ids), -mx.inf)
         return logits - mx.logsumexp(logits, axis=-1, keepdims=True)
 
-    def loss(self, model, tokens, last, ids, mask, targets):
+    def loss(self, model, tokens, last, ids, mask, targets, weights):
         log_probs = self._log_probs(model, tokens, last, ids, mask)
         config = self.config
         return objective(log_probs, mask, targets, config.label_smoothing, config.brier_weight,
-                         config.ranking_weight, config.ranking_margin)
+                         config.ranking_weight, config.ranking_margin, weights)
 
-    def _batches(self):
-        """Endless shuffled batches, grouped by length to limit padding."""
-        size = self.config.batch_size
-        while True:
-            order = self.rng.permutation(len(self.train_examples))
-            for start in range(0, len(order), size * 64):
-                chunk = [self._render(self.train_records, self.train_examples[i], augment=True) for i in order[start:start + size * 64]]
-                chunk = sorted((c for c in chunk if c is not None), key=lambda c: len(c[0]))
-                groups = [chunk[i:i + size] for i in range(0, len(chunk) - size + 1, size)]
-                for g in self.rng.permutation(len(groups)):
-                    yield self._batch(groups[g])
+    def _batches(self) -> BatchStream:
+        return BatchStream(len(self.train_examples), self.config.batch_size, self.rng,
+                           lambda i: self._render(self.train_records, self.train_examples[i], augment=True), self._batch)
 
     def validate(self) -> dict:
         model = self.engine.model
@@ -243,12 +350,12 @@ class Trainer:
         rendered.sort(key=lambda c: len(c[0]))
         for start in range(0, len(rendered), size):
             group = rendered[start:start + size]
-            tokens, last, ids, mask, targets = self._batch(group)
+            tokens, last, ids, mask, targets, _ = self._batch(group)
             log_probs = self._log_probs(model, tokens, last, ids, mask)
             ce = -mx.where(mask, targets * log_probs, 0.0).sum(axis=-1)
             mx.eval(ce, log_probs)
             probs = np.exp(np.where(np.array(mask), np.array(log_probs), -np.inf))
-            for row, (_, target), loss in zip(probs, group, np.array(ce)):
+            for row, (_, target, _), loss in zip(probs, group, np.array(ce)):
                 row = row[: len(target)]
                 losses.append(float(loss))
                 top.append(float(row.max()))
@@ -265,8 +372,7 @@ class Trainer:
         (directory / "adapter_config.json").write_text(json.dumps(
             {"fine_tune_type": "lora", "num_layers": self.config.lora_layers, "lora_parameters": self.lora}, indent=2) + "\n")
         data = [{"path": str(p), "sha256": hashlib.sha256(p.read_bytes()).hexdigest()} for p in self.config.data]
-        meta = {"config": {**asdict(self.config), "data": data, "output": str(self.config.output),
-                           "holdout": [str(p) for p in self.config.holdout]},
+        meta = {"config": {**config_json(self.config), "data": data},
                 "base_revision": self.engine.revision, "train_records": len(self.train_records),
                 "train_examples": len(self.train_examples), "valid_examples": len(self.valid_examples), "history": history}
         (directory / "training.json").write_text(json.dumps(meta, indent=2) + "\n")
@@ -285,15 +391,28 @@ class Trainer:
         trainable = sum(v.size for _, v in tree_flatten(model.trainable_parameters()))
         log(f"trainable parameters {trainable:,}; {len(self.train_examples):,} train and {len(self.valid_examples):,} validation examples")
 
-        history = [{"step": 0, **self.validate()}]
-        log(json.dumps(history[-1]))
-        best = history[-1]["loss"]
-        self.save(config.output, history)
         batches = self._batches()
-        tokens_seen, started, window = 0, time.perf_counter(), []
-        for step in range(1, config.steps + 1):
-            tokens, last, ids, mask, targets = next(batches)
-            loss, grads = step_fn(model, tokens, last, ids, mask, targets)
+        if self.checkpoint is None:
+            history = [{"step": 0, **self.validate()}]
+            log(json.dumps(history[-1]))
+            self.save(config.output, history)
+            first, tokens_seen, elapsed = 1, 0, 0.0
+        else:
+            weights, optimizer_state, state = self.checkpoint
+            model.load_weights(list(weights.items()), strict=False)
+            optimizer.state = optimizer_state
+            mx.eval(model.parameters(), optimizer.state)
+            batches.restore(state["stream"])
+            history, tokens_seen, elapsed = state["history"], state["tokens_seen"], state["elapsed"]
+            first = state["step"] + 1
+            log(f"resuming from step {state['step']}")
+        best = min(entry["loss"] for entry in history)
+        started, window = time.perf_counter() - elapsed, []
+        for step in range(first, config.steps + 1):
+            # Dropout draws from a per-step key, so a resumed run masks exactly as the uninterrupted one would.
+            mx.random.seed(int(np.random.SeedSequence((config.seed, step)).generate_state(1)[0]))
+            tokens, last, ids, mask, targets, weights = next(batches)
+            loss, grads = step_fn(model, tokens, last, ids, mask, targets, weights)
             grads, _ = optim.clip_grad_norm(grads, config.max_grad_norm)
             optimizer.update(model, grads)
             mx.eval(model.trainable_parameters(), optimizer.state, loss)
@@ -313,4 +432,7 @@ class Trainer:
                     meta = json.loads((config.output / "training.json").read_text())
                     meta["history"] = history
                     (config.output / "training.json").write_text(json.dumps(meta, indent=2) + "\n")
+                save_checkpoint(config.output / CHECKPOINT, dict(tree_flatten(model.trainable_parameters())), optimizer.state,
+                                {"step": step, "tokens_seen": tokens_seen, "elapsed": elapsed, "stream": batches.state(),
+                                 "history": history, "config": config_json(config)})
         return history

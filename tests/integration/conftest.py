@@ -9,11 +9,17 @@ import uvicorn
 from ruling.calibration import Calibration
 from ruling.config import Settings, configure_memory
 from ruling.engine import Engine
+from ruling.registry import Registry
 from ruling.server import create_app
 
 configure_memory(Settings.from_env())
 
 TEST_MODEL = os.environ.get("RULING_TEST_MODEL", "mlx-community/Qwen3.5-0.8B-4bit")
+
+
+@pytest.fixture(scope="session")
+def test_model() -> str:
+    return TEST_MODEL
 
 
 @pytest.fixture(scope="session")
@@ -64,7 +70,7 @@ def _serve(app):
 
 @pytest.fixture(scope="session")
 def live_server(engine):
-    server, thread, url = _serve(create_app(engine))
+    server, thread, url = _serve(create_app(Registry.single(engine), None, Settings().max_pending))
     yield url
     server.should_exit = True
     thread.join(timeout=10)
@@ -72,7 +78,7 @@ def live_server(engine):
 
 @pytest.fixture(scope="session")
 def live_server_with_key(engine):
-    server, thread, url = _serve(create_app(engine, api_key="s3cret"))
+    server, thread, url = _serve(create_app(Registry.single(engine), "s3cret", Settings().max_pending))
     yield url
     server.should_exit = True
     thread.join(timeout=10)

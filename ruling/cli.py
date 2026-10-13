@@ -101,6 +101,19 @@ def main(argv: list[str] | None = None) -> None:
         train.add_argument(f"--{name}", type=kind)
     train.add_argument("--no-grad-checkpoint", dest="grad_checkpoint", action="store_false",
                        help="keep all activations; faster but needs far more memory")
+    train.add_argument("--resume", action="store_true",
+                       help="continue from the checkpoint in --output; only --steps may differ from the original run")
+    train.add_argument("--from-adapter", type=Path,
+                       help="start a fresh run from this adapter's weights; its LoRA settings must match")
+
+    export = commands.add_parser("export-adapter", help="write a ruling adapter in PEFT layout for transformers")
+    export.add_argument("adapter", type=Path, help="a LoRA directory from `ruling train`")
+    export.add_argument("--output", type=Path, required=True)
+    export.add_argument("--base-model", required=True, help="Hugging Face id of the unquantized base PEFT should load it on")
+
+    imported = commands.add_parser("import-adapter", help="write a PEFT LoRA adapter in the layout ruling serves")
+    imported.add_argument("peft", type=Path, help="a directory holding adapter_model.safetensors and adapter_config.json")
+    imported.add_argument("--output", type=Path, required=True)
 
     encoder = commands.add_parser("train-encoder", help="fully fine-tune a decision encoder on training records")
     encoder.add_argument("--data", type=Path, nargs="+", required=True)
@@ -201,9 +214,19 @@ def main(argv: list[str] | None = None) -> None:
                                 "lora-scale", "lora-dropout", "max-tokens", "eval-every", "valid-examples", "seed",
                                 "label-smoothing", "brier-weight", "ranking-weight", "ranking-margin")}
         config = TrainConfig(model=args.model or Settings.from_env().model, data=args.data, output=args.output,
-                             holdout=args.holdout, grad_checkpoint=args.grad_checkpoint,
+                             holdout=args.holdout, grad_checkpoint=args.grad_checkpoint, from_adapter=args.from_adapter,
                              **{k: v for k, v in options.items() if v is not None})
-        Trainer(config).run()
+        Trainer(config, resume=args.resume).run()
+        return
+    if args.command == "export-adapter":
+        from ruling.peft import export_adapter
+        export_adapter(args.adapter, args.output, args.base_model)
+        print(f"wrote {args.output}")
+        return
+    if args.command == "import-adapter":
+        from ruling.peft import import_adapter
+        import_adapter(args.peft, args.output)
+        print(f"wrote {args.output}")
         return
     if args.command == "train-encoder":
         from ruling.decision_train import DecisionTrainConfig, DecisionTrainer

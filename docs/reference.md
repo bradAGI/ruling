@@ -27,11 +27,39 @@ The first start downloads the default model, `mlx-community/Qwen3.5-4B-4bit`
 | `RULING_OPENAI_API_KEY` | unset | Sent as a bearer token when the host wants one. Local servers usually do not |
 | `RULING_OPENAI_TOP_LOGPROBS` | `20` | How many top logprobs the host returns, which is also the option ceiling. OpenAI allows 20, `mlx_lm.server` allows 11 |
 | `RULING_OPENAI_EXTRA_BODY` | `{}` | JSON merged into every request, for host-specific fields such as `{"chat_template_kwargs": {"enable_thinking": false}}` |
-| `RULING_ADAPTER` | unset | A LoRA directory from `ruling train`; see [docs/adapter.md](adapter.md) |
+| `RULING_ADAPTER` | unset | A LoRA directory from `ruling train` or `ruling import-adapter`; see [docs/adapter.md](adapter.md) |
 | `RULING_CASCADE_TO` | unset | The secondary model, in the same syntax as `RULING_MODEL`; it answers only the questions the primary is unsure about |
 | `RULING_CASCADE_THRESHOLD` | unset | Top probability below which a question is escalated; required with `RULING_CASCADE_TO` |
 | `RULING_FAILOVER_TO` | unset | A model that answers the whole request whenever the primary is unavailable (429, 502–504, or a timeout); the response's `model` names whichever answered |
+| `RULING_MODELS` | unset | A JSON file of further models to serve by name beside the primary; see [Serve several models](#serve-several-models) |
+| `RULING_MAX_PENDING` | `64` | Requests allowed in flight at once. The next one is refused with 429 `queue_full` and a `Retry-After` estimated from the queue and recent latency |
 | `RULING_HOST`, `RULING_PORT` | `127.0.0.1`, `8010` | Bind address |
+
+### Serve several models
+
+One process can answer for more than the primary. `RULING_MODELS` names a JSON
+file whose keys are model names a request may send as `model`, and whose
+values say what answers under that name:
+
+```json
+{
+  "routing/v1": {"model": "mlx-community/Qwen3-4B-Instruct-2507-4bit",
+                 "adapter": "runs/adapters/routing", "calibration": "runs/adapters/routing/calibration.json"},
+  "large":      {"model": "mlx-community/Qwen3.6-35B-A3B-4bit"}
+}
+```
+
+`model` takes the same syntax as `RULING_MODEL`; `adapter` and `calibration`
+are optional and resolve relative to the file. The primary is still what
+`RULING_MODEL` names, and still answers `default`, `jev-latest`, and requests
+with no `model`; the cascade and failover settings apply to the primary only.
+Entries that fine-tune a base the server already holds share its weights: the
+LoRA layers are swapped under the engine lock before each request, so a plain
+base and five adapters on it cost one copy of the base. An adapter whose LoRA
+layout (rank, depth) differs from the first one loaded on that base gets its
+own copy. Each entry's calibration is its own and is listed in `GET /v1/models`,
+so a client that applies its own temperature can see when the server already
+has.
 
 ### Bring your own model
 
@@ -71,13 +99,38 @@ uv run ruling ask "Since this morning every request with our API key returns 401
   --noul   "blocked=The customer is blocked from using the product."
 ```
 
+## Training
+
+`ruling train --data RECORDS... --output DIR` LoRA-fine-tunes the answer
+readout; the README walks through a run and [docs/adapter.md](adapter.md)
+describes the adapter it produces. Beyond the hyperparameters (`--steps`,
+`--learning-rate`, `--lora-layers`, `--lora-rank`, `--lora-scale`, and the
+rest of `ruling train --help`):
+
+| Flag | Meaning |
+|---|---|
+| `--resume` | Continue from `DIR/checkpoint/`, written at every `--eval-every` step and at the end. Weights, optimizer state and step counter, the position in the batch stream, and the history all come back, so the run finishes with the same weights it would have had uninterrupted. Every setting must match the original run except `--steps`, which may be raised to extend a finished run |
+| `--from-adapter DIR` | Start a fresh run, fresh optimizer and step 0, from an existing adapter's weights. Its `adapter_config.json` must match the requested LoRA layers, rank, scale and dropout |
+
+The top-level adapter files in `DIR` are always the best validation loss so
+far; `DIR/checkpoint/` is the latest step. Serve the former.
+
+`ruling export-adapter DIR --output PEFT_DIR --base-model HF_ID` writes the
+adapter in PEFT's layout, `adapter_model.safetensors` plus a `LoraConfig`,
+for `PeftModel.from_pretrained` on the unquantized base `HF_ID`.
+`ruling import-adapter PEFT_DIR --output DIR` is the inverse, for any PEFT
+LoRA adapter whose adapted layers end the stack, which is the only shape
+mlx-lm can load. A ruling adapter is trained against 4-bit MLX weights, so
+under PEFT on the fp16 base it is an approximation of what ruling serves;
+measure it there before trusting a threshold fitted here.
+
 ## API
 
 `POST /v1/systemone`
 
 ```json
 {
-  "model": "optional; must match the loaded model",
+  "model": "optional; a name from GET /v1/models, or default for the primary",
   "state": "string, object, or array",
   "questions": {
     "<id>": {"type": "choice", "instructions": "...", "criteria": {"<key>": "description, JSON, or null"}},
@@ -99,15 +152,30 @@ structure. Answers come back keyed by the same ids:
 `usage.input_tokens` counts every token the model processed: the shared prefix
 once, plus each question suffix for each ordering. `output_tokens` is always 0.
 
-Errors: 422 for a malformed request or a Choice over 255 options, 413 for a
-request over a token limit, 404 for a `model` that is neither the loaded one
-nor a default alias (`jev-latest`, `default`), 401 when an API key is
-configured and missing.
+The response's `model` is the name the request selected; the primary reports
+its engine's id, which a failover changes to say which side answered.
+
+Errors come in the hosted API's shape, `{"error": {"code", "message",
+"param"?}}`, where `code` is stable for programs and `message` is for people:
+
+| Status | `code` | When |
+|---|---|---|
+| 422 | `invalid_input` | a malformed request (`param` names the field), a Choice over 255 options, or a state the engine refuses |
+| 413 | `payload_too_large` | a request over a token limit |
+| 404 | `unknown_model` | a `model` the server does not answer for; the message lists the names it does |
+| 401 | `unauthorized` | an API key is configured and missing or wrong |
+| 429 | `queue_full` | `RULING_MAX_PENDING` requests are already in flight; `Retry-After` says how many seconds to wait |
+| 503 | `upstream_unavailable` | the primary is a hosted model and it is down, with no failover |
+
+TypeSafe's SDK reads `error.message` from this shape and retries 429 honoring
+`Retry-After`, so both clients and rulesmith behave the same against ruling
+and the hosted services.
 
 `GET /v1/models` returns `{"models": [...]}` with the hosted API's `name`,
-`description` and `release_date`, plus the Hugging Face revision, adapter
-digest and limits that only a local engine knows. `GET /health` returns the
-model id. `GET /` is a playground page.
+`description` and `release_date`, plus `base` (the weights behind the name),
+the Hugging Face revision, adapter digest, the calibration temperatures in
+force, and limits that only a local engine knows. `GET /health` returns the
+primary's name. `GET /` is a playground page.
 
 ### TypeSafe's own SDK talks to ruling
 
@@ -168,6 +236,59 @@ const { answers } = await new RulingClient().systemOne({ state, questions: { tea
 
 The thresholds belong in your code, versioned and tested. Fit them on labeled
 data from your own traffic; see [calibration](measurements.md#evaluation-and-calibration).
+
+## Evaluation
+
+### Datasets
+
+`ruling eval` and `ruling train` read a `.jsonl` file (one row per line) or a
+`.json` array. A row is `{id?, state, questions, labels?, references?, family?,
+weight?}`; the record format is described in
+[datasets/README.md](../datasets/README.md). Rows written for hosted decision
+platforms that share the System One question shape are accepted as they are. Their label
+forms are normalized when the row is validated:
+
+| Question | Hard label | Soft label |
+|---|---|---|
+| noul | `true`, `"true"`, `false`, `"false"` (also `"yes"`/`"no"`) | a probability of yes, or `{"true": p, "false": q}` |
+| choice | the option key | `{option: p, ...}` over every option, or a list in option order |
+| score | a level index `2`, its option id `"2"`, or the level text | `[p0, p1, ...]` from the lowest level up, or `{"0": p0, ...}` |
+
+A soft label must cover every option, be non-negative, and sum to 1 within
+0.02. It is stored as the record's `target` reference, with the hard label set
+to its most likely option; that argmax is what accuracy scores.
+A single-question row `{state, question, label}` (or `target`, or `expected`)
+becomes one question named `decision`. `weight` (default 1.0, never negative)
+is the row's share of a training update: a batch's loss is the weighted mean of
+its rows, so weights only matter relative to each other.
+
+### Output
+
+`ruling eval` prints one JSON object. `question_types` holds the per-type
+summaries (accuracy, balanced accuracy, calibration error, Brier, coverage at
+a 5% error budget, option-reversal flips, reference agreement); those keys are
+stable. Next to it sit three blocks laid out like a hosted platform's evaluation
+results, each holding the same metrics dict over the labeled, scored
+questions in its scope, computed on the calibrated probabilities:
+
+- `overall`: every question pooled;
+- `by_type`: keyed by `choice`, `score`, `noul`;
+- `by_question`: keyed by question id.
+
+The target `y` is the record's soft `target` reference when it has one, else
+one-hot on the label. Each block is `{"n": 0}` when nothing is in scope, else:
+
+| Key | Definition |
+|---|---|
+| `n` | Decisions in scope |
+| `accuracy` | Share where argmax `p` equals argmax `y` |
+| `nll` | Mean of −Σ `y` log `p`, with `p` floored at 1e-12 |
+| `brier` | Mean of Σ (`p` − `y`)² |
+| `ece` | Expected calibration error: top-1 confidence `c` is binned into 10 equal-width bins, bin `b` holding `b/10 < c ≤ (b+1)/10` (and `c = 0` in the first), and each bin adds its share of `n` times the gap between its mean confidence and its accuracy |
+| `mean_confidence` | Mean top-1 probability |
+| `selective` | Keyed `"0.5"`, `"0.7"`, `"0.9"`, `"0.95"`: `coverage` is the share of decisions with top-1 confidence ≥ the threshold, `accuracy` is accuracy over that share, or `null` when it is empty |
+
+The keys and the four thresholds are fixed: other tools read them by name.
 
 ## How it works
 

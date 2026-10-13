@@ -69,6 +69,47 @@ Any calibration file is bound to the adapter's content hash as well as the
 model, so a temperature fitted on the base cannot be loaded against the
 adapter by mistake.
 
+### Under PEFT, outside ruling
+
+The same weights load in transformers through PEFT:
+
+```bash
+uv run ruling export-adapter runs/adapters/v1 --output runs/adapters/v1-peft \
+  --base-model Qwen/Qwen3-4B-Instruct-2507
+```
+
+```python
+from peft import PeftModel
+from transformers import AutoModelForCausalLM
+
+base = AutoModelForCausalLM.from_pretrained("Qwen/Qwen3-4B-Instruct-2507")
+model = PeftModel.from_pretrained(base, "runs/adapters/v1-peft")
+```
+
+The export transposes each factor, folds ruling's `scale` into
+`lora_alpha`, and lists the adapted layers so a partial-depth adapter
+lands on the right blocks. `training.json` travels with it. Read the caveat
+before relying on it: the adapter was trained against the 4-bit MLX weights,
+so on the fp16 base under PEFT it is an approximation of what ruling serves,
+and the readout it was trained for is ruling's prompt and letter codes, not
+free generation.
+
+The other direction, `ruling import-adapter PEFT_DIR --output DIR`, takes a
+PEFT LoRA adapter whose adapted layers are the last N of the stack, which is
+the only shape mlx-lm can load, and writes the layout `RULING_ADAPTER`
+expects. It fetches the base model's `config.json` from the Hub to check the
+layer range.
+
+### Continuing a run
+
+`ruling train` writes `DIR/checkpoint/` at every evaluation and at the end.
+`--resume` continues from it with the same weights, optimizer and batch
+order an uninterrupted run would have had; raise `--steps` to extend a run
+that already finished, and leave everything else as it was or the trainer
+refuses. `--from-adapter DIR` starts a new run from an adapter's weights with
+a fresh optimizer, for a second pass on new data; the adapter's LoRA
+settings must match the new run's.
+
 ## Limits
 
 - Trained for the letter readout on this base. It is not a general-purpose
