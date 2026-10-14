@@ -263,6 +263,38 @@ small set turns on where a handful of confident errors land. Clef-flash's lead
 is far larger than anything the loss moved, which points at its trained head
 and data rather than its objective. The terms stay available and off.
 
+### Tried and rejected: Gemma 4 31B as the base
+
+On the Decision Index, three separate readouts on stock Gemma 4 31B score 58
+to 60, above every untrained Qwen entry, so it was run through ruling
+unchanged on the four held-out sets: `mlx-community/gemma-4-31b-it-4bit` at
+`696d436c`, three orderings, ruling at `3475f27`, 14 October 2026. Google's
+quantization-aware-trained build (`mlx-community/gemma-4-31B-it-qat-OptiQ-4bit`
+at `b59347f3`, 5.2 bits per weight) was then run on the two sets where the gap
+was widest, to see whether the 4-bit conversion was to blame.
+
+| three orderings | typesafe102 | Every | authored144 | perturbations108 | pooled |
+|---|---:|---:|---:|---:|---:|
+| Gemma 4 31B, 4-bit | 81/102 | 113/154 | 127/144 | 96/108 | 417/508 |
+| Gemma 4 31B, quantization-aware build | | 119/154 | 128/144 | | |
+| Qwen3.6-35B-A3B, from above | 89/102 | 142/154 | 138/144 | 103/108 | 472/508 |
+| Clef-flash, from above | 91/102 | 147/154 | 130/144 | 103/108 | 471/508 |
+
+The readout is not the cause. On the wrong answers inspected, Gemma's
+unrestricted next token put essentially all its probability on the answer
+letters, so ruling read exactly what the model meant to say; it was wrong and
+certain, with mean confidence 0.99 and calibration error 0.11 to 0.26. On
+Every's yes/no rows 37 of its 41 errors say yes where the label is no, a lean
+that ordering averaging cannot remove because it is about meaning, not letter
+position. It also misses about three times as many choices as the 35B on the
+two authored sets. The better quantization gains one to six questions, far
+short of the gap.
+
+The Gemma entries that score well on the Decision Index each add a correction
+ruling does not: temperatures fitted on index questions, or a running prior
+over answers. Whether such a correction closes this gap was not tested. On
+these sets the 35B remains the base to use.
+
 ### Tried and rejected: one-pass Choice above 62 options
 
 The letter readout has 62 single-token codes, so a Choice with more options
