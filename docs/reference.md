@@ -303,6 +303,23 @@ covered by an integration test that installs the real
 and runs it against a live ruling server, so the compatibility claim fails
 loudly if either side drifts.
 
+Endor's client works the same way, by its base URL alone, so code written for
+Endor can run against a local ruling for development, offline or in tests:
+
+```python
+import endor   # the official package, unmodified
+
+client = endor.EndorClient(api_key="whatever-you-set-as-RULING_API_KEY", base_url="http://127.0.0.1:8010")
+client.system_one(state, questions, model="tickets/v1")
+```
+
+Endor names models `<project>/<name>`; give a `RULING_MODELS` entry the same
+name and the call needs no change. Decisions, `client.models.list()` and every
+answer type are covered by an integration test against the real
+[`endor`](https://pypi.org/project/endor/) package. Its projects, datasets,
+training runs and billing are Endor's platform and have no counterpart here;
+ruling trains with `ruling train`.
+
 ## Clients
 
 Python, in this package:

@@ -154,6 +154,19 @@ nvtx = [
 ]
 
 [[package]]
+name = "endor"
+version = "0.6.1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "httpx" },
+    { name = "pydantic" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/f8/46/fa750ddea30b908b94a8bc3b57206ab904537682f58bc1944aa338fc4470/endor-0.6.1.tar.gz", hash = "sha256:d31e24e4e00abe998918b44e79587ae034c891e9ccd5e1aef8b352c3a0f51d92", size = 129024, upload-time = "2026-10-13T19:41:07.402Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/1d/ae/63a07c50453d1e25b4bad1387d2c15a65a5f2d4d893961bf400856d28df1/endor-0.6.1-py3-none-any.whl", hash = "sha256:5da164cc897b83aa66de1b23136309260c52c8ae1d3fdcd6ec1687e24df162bf", size = 80045, upload-time = "2026-10-13T19:41:06.125Z" },
+]
+
+[[package]]
 name = "fastapi"
 version = "0.141.1"
 source = { registry = "https://pypi.org/simple" }
@@ -1183,6 +1196,7 @@ dependencies = [
 
 [package.dev-dependencies]
 dev = [
+    { name = "endor" },
     { name = "peft" },
     { name = "pytest" },
     { name = "pytest-timeout" },
@@ -1205,6 +1219,7 @@ requires-dist = [
 
 [package.metadata.requires-dev]
 dev = [
+    { name = "endor", specifier = ">=0.6.1" },
     { name = "peft", specifier = ">=0.21.2" },
     { name = "pytest", specifier = ">=8" },
     { name = "pytest-timeout", specifier = ">=2.4.0" },

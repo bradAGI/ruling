@@ -26,6 +26,7 @@ ruling = "ruling.cli:main"
 
 [dependency-groups]
 dev = [
+    "endor>=0.6.1",
     "peft>=0.21.2",
     "pytest>=8",
     "pytest-timeout>=2.4.0",
