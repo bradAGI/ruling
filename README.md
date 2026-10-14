@@ -81,6 +81,7 @@ questions the primary is unsure about, and is set separately with
 | a model on OpenRouter | `RULING_MODEL=openrouter:<name>` | with a spend budget |
 | a model or LoRA adapter on an NVIDIA box | `RULING_MODEL=vllm:<name>` + `RULING_VLLM_BASE_URL` | vLLM's own decision endpoint, batched on the GPU; export an adapter trained here with `ruling export-adapter` |
 | Cloudflare's Clef-flash, locally | `RULING_MODEL=typesafe:clef-flash` + `TYPESAFE_BASE_URL=http://127.0.0.1:8000` | a trained 9B decision model; run the [MLX port](https://huggingface.co/mlx-community/clef-flash-4bit) with `python clef_mlx.py serve` and point ruling at it. 6.2 GB, the best-calibrated model we have measured |
+| the most accurate open decision model we have measured | `RULING_MODEL=typesafe:pplx-decider-v1.1-27b` + `TYPESAFE_BASE_URL=http://127.0.0.1:8092` | Perplexity's pplx-decider, 206 of JevBench's 231 public items; start its MLX port with `assets/bench/serve.sh pplx 8092`. 15.3 GB, prompts up to 8,192 tokens |
 | Jev itself, or any System One server | `RULING_MODEL=typesafe:<alias>` + `TYPESAFE_API_KEY` | `typesafe:jev-latest`; the host's own probabilities pass straight through. Mostly useful as the secondary, below |
 
 Any of these can also be the secondary. The other settings — token limits, API
@@ -102,7 +103,9 @@ EOF
 RULING_MODELS=models.json uv run ruling serve
 ```
 
-Details in [docs/reference.md](docs/reference.md#serve-several-models).
+An entry can also name a decision server running elsewhere with `base_url`,
+so pplx-decider, Clef-flash and your own tuned model can answer side by side
+under one API. Details in [docs/reference.md](docs/reference.md#serve-several-models).
 
 ## Make it yours: fine-tune on your own decisions
 

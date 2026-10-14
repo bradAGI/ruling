@@ -9,11 +9,9 @@ cost of one copy of each base.
 from __future__ import annotations
 
 import json
-import os
 from dataclasses import dataclass, replace
 from pathlib import Path
 
-from ruling.against import API_KEY_ENV, BASE_URL_ENV, DEFAULT_BASE_URL
 from ruling.calibration import Calibration
 from ruling.cascade import CascadeEngine
 from ruling.config import Settings
@@ -33,7 +31,8 @@ from ruling.hosted import (
 )
 from ruling.questions import DEFAULT_MODEL_ALIASES, ModelInfo
 
-ENTRY_FIELDS = ("model", "adapter", "calibration")
+ENTRY_FIELDS = ("model", "adapter", "calibration", "base_url")
+REMOTE_PREFIXES = (TYPESAFE_PREFIX, VLLM_PREFIX, HOSTED_PREFIX)
 
 
 class UnknownModel(KeyError):
@@ -51,6 +50,8 @@ class Entry:
     model: str
     adapter: Path | None = None
     calibration: Path | None = None
+    base_url: str | None = None
+    """Where a `typesafe:`, `vllm:` or `openai:` entry is served, in place of the global setting."""
 
     @classmethod
     def parse(cls, name: str, raw: object, relative_to: Path) -> "Entry":
@@ -60,7 +61,10 @@ class Entry:
         if unknown:
             raise ValueError(f"model {name!r} has unknown fields {sorted(unknown)}; allowed: {list(ENTRY_FIELDS)}")
         paths = {key: relative_to / raw[key] for key in ("adapter", "calibration") if raw.get(key)}
-        return cls(model=str(raw["model"]), **paths)
+        base_url = raw.get("base_url")
+        if base_url and not str(raw["model"]).startswith(REMOTE_PREFIXES):
+            raise ValueError(f"model {name!r} has a base_url, which only {', '.join(REMOTE_PREFIXES)} models use")
+        return cls(model=str(raw["model"]), base_url=base_url, **paths)
 
 
 def load_entries(path: Path) -> dict[str, Entry]:
@@ -97,8 +101,8 @@ def build_engine(settings: Settings):
         return CascadeEngine(first, second, settings.cascade_threshold)
     calibration = Calibration.load(settings.calibration_path) if settings.calibration_path else Calibration()
     if settings.model.startswith(TYPESAFE_PREFIX):
-        return TypeSafeEngine(settings.model, calibration, os.environ.get(BASE_URL_ENV, DEFAULT_BASE_URL),
-                              os.environ.get(API_KEY_ENV), settings.max_input_tokens, settings.max_branch_tokens)
+        return TypeSafeEngine(settings.model, calibration, settings.typesafe_base_url, settings.typesafe_api_key,
+                              settings.max_input_tokens, settings.max_branch_tokens)
     if settings.model.startswith(VLLM_PREFIX):
         if not settings.vllm_base_url:
             raise ValueError("set RULING_VLLM_BASE_URL to the vLLM server, without a path")
@@ -175,5 +179,8 @@ def _build_entry(entry: Entry, settings: Settings, loaded: dict[str, object]):
                 return engine.variant(entry.adapter, calibration)
             except Engine.IncompatibleAdapter:
                 break
+    # Only the engine the model's prefix selects reads its address, so setting all three is exact.
+    address = ({"typesafe_base_url": entry.base_url, "vllm_base_url": entry.base_url, "openai_base_url": entry.base_url}
+               if entry.base_url else {})
     return build_engine(replace(settings, model=entry.model, adapter_path=entry.adapter,
-                                calibration_path=entry.calibration, cascade_to=None, failover_to=None))
+                                calibration_path=entry.calibration, cascade_to=None, failover_to=None, **address))

@@ -9,6 +9,7 @@ from pathlib import Path
 
 import mlx.core as mx
 
+from ruling.against import API_KEY_ENV, BASE_URL_ENV, DEFAULT_BASE_URL
 from ruling.hosted import TOP_LOGPROBS
 
 DEFAULT_MODEL = "mlx-community/Qwen3.5-4B-4bit"
@@ -64,6 +65,8 @@ class Settings:
     openai_concurrency: int = 16
     openai_extra_body: dict = field(default_factory=dict)
     vllm_base_url: str = ""
+    typesafe_base_url: str = DEFAULT_BASE_URL
+    typesafe_api_key: str | None = None
     vllm_api_key: str | None = None
     openrouter_providers: tuple[str, ...] = ()
     openrouter_budget_usd: float = 1.0
@@ -100,6 +103,8 @@ class Settings:
             openai_concurrency=int(env.get("RULING_OPENAI_CONCURRENCY", cls.openai_concurrency)),
             openai_extra_body=json.loads(env.get("RULING_OPENAI_EXTRA_BODY", "{}")),
             vllm_base_url=env.get("RULING_VLLM_BASE_URL", cls.vllm_base_url),
+            typesafe_base_url=env.get(BASE_URL_ENV, cls.typesafe_base_url),
+            typesafe_api_key=env.get(API_KEY_ENV) or None,
             vllm_api_key=env.get("RULING_VLLM_API_KEY") or None,
             openrouter_providers=tuple(p for p in env.get("RULING_OPENROUTER_PROVIDERS", "").split(",") if p),
             openrouter_budget_usd=float(env.get("RULING_OPENROUTER_BUDGET_USD", cls.openrouter_budget_usd)),

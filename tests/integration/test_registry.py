@@ -116,3 +116,21 @@ def test_server_answers_by_name_and_stays_consistent_under_contention(adapters, 
                 assert np.allclose(list(got["probabilities"].values()), list(expected["probabilities"].values()), atol=1e-5)
             else:
                 assert abs(got["noul"] - expected["noul"]) < 1e-5
+
+
+def test_each_decision_server_entry_is_asked_at_its_own_address(live_server, tmp_path, monkeypatch):
+    # Publishers' decision models each run behind their own /v1/systemone server; one ruling
+    # process serves them all by name, so an entry's address must win over the global one.
+    dead = "http://127.0.0.1:9"
+    monkeypatch.setenv("TYPESAFE_BASE_URL", dead)
+    monkeypatch.delenv("TYPESAFE_API_KEY", raising=False)
+    (tmp_path / "models.json").write_text(json.dumps({
+        "up": {"model": "typesafe:", "base_url": live_server},
+        "down": {"model": "typesafe:", "base_url": dead},
+    }))
+    registry = Registry.from_settings(Settings(model="typesafe:", models_path=tmp_path / "models.json"))
+    with TestClient(create_app(registry, None, 4)) as client:
+        up = client.post("/v1/systemone", json={**PAYLOAD, "model": "up"})
+        assert up.status_code == 200 and up.json()["answers"]["team"]["choice"] == "billing"
+        down = client.post("/v1/systemone", json={**PAYLOAD, "model": "down"})
+        assert down.status_code == 503 and down.json()["error"]["code"] == "upstream_unavailable"

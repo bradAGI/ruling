@@ -69,6 +69,31 @@ own copy. Each entry's calibration is its own and is listed in `GET /v1/models`,
 so a client that applies its own temperature can see when the server already
 has.
 
+An entry for a `typesafe:`, `vllm:` or `openai:` model may add `base_url`, the
+server it lives on, in place of the global `TYPESAFE_BASE_URL`,
+`RULING_VLLM_BASE_URL` or `RULING_OPENAI_BASE_URL`. That is how one ruling
+process puts the open decision models, each running under its publisher's own
+code, behind one API beside your local model. `assets/bench/serve.sh` starts
+each one as its publisher ships it, in its own virtualenv:
+
+```bash
+assets/bench/serve.sh pplx 8092 &         # Perplexity's pplx-decider-v1.1-27b, 4-bit MLX port, 15.3 GB
+assets/bench/serve.sh decider-4b 8093 &   # Mapika's decider-4b, PyTorch on MPS
+```
+
+```json
+{
+  "pplx":       {"model": "typesafe:pplx-decider-v1.1-27b", "base_url": "http://127.0.0.1:8092"},
+  "decider-4b": {"model": "typesafe:decider-4b",            "base_url": "http://127.0.0.1:8093"}
+}
+```
+
+Requests then pick one with `"model": "pplx"`. pplx-decider scored highest of
+every open model we measured, 206 of JevBench's 231 public items (see
+[Measurements](measurements.md#other-open-decision-models-run-locally)); it
+refuses prompts over 8,192 tokens, and that refusal reaches your client as an
+error rather than an answer.
+
 ### Bring your own model
 
 The readout needs one thing from a model: the probabilities of the next token,

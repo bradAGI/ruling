@@ -49,7 +49,9 @@ def test_entries_resolve_paths_against_the_file_and_refuse_unknown_fields_and_al
     entries = load_entries(models)
     assert entries["routing/v1"] == Entry("some/base", tmp_path / "adapters/routing", tmp_path / "adapters/routing/calibration.json")
     assert entries["big"] == Entry("some/big")
-    for bad in ({"x": {"adapter": "a"}}, {"x": {"model": "m", "rotations": 3}}, {"default": {"model": "m"}}, {"": {"model": "m"}}, ["m"]):
+    for bad in ({"x": {"adapter": "a"}}, {"x": {"model": "m", "rotations": 3}}, {"default": {"model": "m"}}, {"": {"model": "m"}}, ["m"],
+                # A local model has no address to override; ignoring one would hide a typo'd prefix.
+                {"x": {"model": "some/base", "base_url": "http://127.0.0.1:8092"}}):
         models.write_text(json.dumps(bad))
         with pytest.raises(ValueError):
             load_entries(models)
