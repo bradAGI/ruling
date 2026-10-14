@@ -1,5 +1,6 @@
 import math
 
+import mlx.core as mx
 import numpy as np
 import pytest
 
@@ -91,9 +92,9 @@ def test_calibration_refuses_a_different_engine(tmp_path):
         Calibration({"choice": 1.2}).save(path)
 
 
+@pytest.mark.skipif("memory_size" not in mx.device_info(),
+                    reason="the backend reports no memory size, so ruling sets no budget by design (Linux CPU)")
 def test_cli_bounds_the_mlx_buffer_cache(tmp_path, monkeypatch):
-    import mlx.core as mx
-
     from ruling.cli import main
 
     monkeypatch.setenv("RULING_CACHE_LIMIT_GB", "1.5")
