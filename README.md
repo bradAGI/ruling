@@ -163,6 +163,12 @@ roughly halved, and confident errors (wrong while reporting p ≥ 0.9) fell
 three- to thirteen-fold. Full card and reproduction in
 [docs/adapter.md](docs/adapter.md).
 
+**Then keep learning from production.** Set `RULING_LEDGER=ledger.sqlite` and
+the server records every decision and returns its `id`; post what turned out
+to be right to `/v1/decisions/<id>/outcome`, and `ruling export-decisions`
+turns the resolved ones into training records for step 2. See
+[Learn from your own traffic](docs/reference.md#learn-from-your-own-traffic).
+
 ## Escalate the doubtful questions to a secondary model
 
 Once the primary model's confidence is honest, one threshold lets a bigger

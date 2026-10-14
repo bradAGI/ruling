@@ -115,6 +115,11 @@ def main(argv: list[str] | None = None) -> None:
     imported.add_argument("peft", type=Path, help="a directory holding adapter_model.safetensors and adapter_config.json")
     imported.add_argument("--output", type=Path, required=True)
 
+    decisions = commands.add_parser("export-decisions",
+                                    help="write the served decisions that have outcomes as training records")
+    decisions.add_argument("--ledger", type=Path, required=True, help="the server's RULING_LEDGER file")
+    decisions.add_argument("--output", type=Path, required=True)
+
     encoder = commands.add_parser("train-encoder", help="fully fine-tune a decision encoder on training records")
     encoder.add_argument("--data", type=Path, nargs="+", required=True)
     encoder.add_argument("--output", type=Path, required=True)
@@ -227,6 +232,12 @@ def main(argv: list[str] | None = None) -> None:
         from ruling.peft import import_adapter
         import_adapter(args.peft, args.output)
         print(f"wrote {args.output}")
+        return
+    if args.command == "export-decisions":
+        from ruling.ledger import DecisionLedger
+        records = list(DecisionLedger(args.ledger).records())
+        args.output.write_text("".join(r.model_dump_json(exclude_none=True) + "\n" for r in records))
+        print(f"wrote {len(records)} records to {args.output}")
         return
     if args.command == "train-encoder":
         from ruling.decision_train import DecisionTrainConfig, DecisionTrainer

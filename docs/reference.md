@@ -35,6 +35,7 @@ The first start downloads the default model, `mlx-community/Qwen3.5-4B-4bit`
 | `RULING_CASCADE_THRESHOLD` | unset | Top probability below which a question is escalated; required with `RULING_CASCADE_TO` |
 | `RULING_FAILOVER_TO` | unset | A model that answers the whole request whenever the primary is unavailable (429, 502–504, or a timeout); the response's `model` names whichever answered |
 | `RULING_MODELS` | unset | A JSON file of further models to serve by name beside the primary; see [Serve several models](#serve-several-models) |
+| `RULING_LEDGER` | unset | A SQLite file that records every answered request, its state included, so outcomes can be reported and the decisions retrained on; see [Learn from your own traffic](#learn-from-your-own-traffic) |
 | `RULING_MAX_PENDING` | `64` | Requests allowed in flight at once. The next one is refused with 429 `queue_full` and a `Retry-After` estimated from the queue and recent latency |
 | `RULING_HOST`, `RULING_PORT` | `127.0.0.1`, `8010` | Bind address |
 
@@ -161,6 +162,24 @@ mlx-lm can load. A ruling adapter is trained against 4-bit MLX weights, so
 under PEFT on the fp16 base it is an approximation of what ruling serves;
 measure it there before trusting a threshold fitted here.
 
+### Learn from your own traffic
+
+With `RULING_LEDGER` set, the server keeps every decision it answers, and each
+response carries an `id`. Whoever later learns what was right reports it:
+
+```bash
+curl -s localhost:8010/v1/decisions/$ID/outcome -d '{"labels": {"team": "billing"}}' \
+  -H 'content-type: application/json'
+```
+
+Labels take every form a training record does, and are checked against the
+logged question on arrival, so a bad one is refused with 422 rather than
+breaking a training run later. A second report for the same question replaces
+the first. `ruling export-decisions --ledger FILE --output RECORDS` writes every
+decision with an outcome as a training record, unlabeled questions left
+unlabeled, ready for `ruling train --data RECORDS`. Off by default: the ledger
+holds your states verbatim.
+
 ## API
 
 `POST /v1/systemone`
@@ -191,6 +210,12 @@ structure. Answers come back keyed by the same ids:
 | score | `score` (probability-weighted level index, so `1.74` sits between levels 1 and 2), `legend` index to level text, `probabilities` over indices, `confidence` |
 | noul | `noul`, the probability the statement is true |
 
+With a ledger configured, the response also carries `id`, the decision to
+report an outcome for; without one the body is exactly the hosted API's.
+
+`POST /v1/decisions/<id>/outcome` with `{"labels": {"<id>": label}}` records
+what was right, and returns the labels as stored; it exists only with a ledger.
+
 `usage.input_tokens` counts every token the model processed: the shared prefix
 once, plus each question suffix for each ordering. `output_tokens` is always 0.
 
@@ -206,6 +231,7 @@ Errors come in the hosted API's shape, `{"error": {"code", "message",
 | 422 | `invalid_options` | a well-formed question the model cannot answer: a choice with one option or more than the model reads, or nothing to ask; `param` is `questions.<id>` |
 | 422 | `context_too_long` | a request over a token limit; `param` is `questions.<id>` when one question is at fault |
 | 404 | `unknown_model` | a `model` the server does not answer for; the message lists the names it does |
+| 404 | `unknown_decision` | an outcome for an id the ledger does not hold |
 | 401 | `unauthorized` | an API key is configured and missing or wrong |
 | 429 | `queue_full` | `RULING_MAX_PENDING` requests are already in flight; `Retry-After` says how many seconds to wait |
 | 503 | `upstream_unavailable` | the primary is a hosted model and it is down, with no failover |

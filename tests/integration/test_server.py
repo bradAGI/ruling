@@ -4,13 +4,18 @@ import subprocess
 import time
 from pathlib import Path
 
+import httpx
 import pytest
 from fastapi.testclient import TestClient
 
+from ruling.evals import load_dataset
+from ruling.ledger import DecisionLedger
 from ruling.questions import Choice, Noul
 from ruling.sdk import RulingClient
 from ruling.registry import Registry
 from ruling.server import create_app
+
+from .conftest import _serve
 
 pytestmark = pytest.mark.integration
 
@@ -147,3 +152,34 @@ def test_official_typesafe_sdk_against_live_server(live_server_with_key, engine,
     assert set(response.scores["urgency"].probabilities) == {0, 1, 2}
     assert response.usage.input_tokens > 0 and response.usage.output_tokens == 0
     assert models.models[0].name == engine.model_id and models.models[0].release_date
+
+
+def test_a_logged_decision_takes_its_outcome_and_exports_as_training_data(engine, tmp_path):
+    ledger = tmp_path / "ledger.sqlite"
+    server, thread, url = _serve(create_app(Registry.single(engine), None, 4, DecisionLedger(ledger)))
+    try:
+        with RulingClient(base_url=url) as client:
+            decision = client.system_one(state=PAYLOAD["state"],
+                                         questions={"refund": Noul(instructions="The customer asks for a refund.")}).id
+            assert client.outcome(decision, {"refund": True}) == {"refund": True}
+            with pytest.raises(httpx.HTTPStatusError) as wrong:
+                client.outcome(decision, {"refund": "maybe"})
+            assert wrong.value.response.json()["error"]["code"] == "invalid_input"
+            with pytest.raises(httpx.HTTPStatusError) as missing:
+                client.outcome("no-such-id", {"refund": True})
+            assert missing.value.response.json()["error"]["code"] == "unknown_decision"
+    finally:
+        server.should_exit = True
+        thread.join(timeout=10)
+    exported = tmp_path / "train.jsonl"
+    subprocess.run(["uv", "run", "ruling", "export-decisions", "--ledger", str(ledger), "--output", str(exported)],
+                   check=True)
+    [record] = load_dataset(exported)
+    assert record.state == PAYLOAD["state"] and record.labels == {"refund": True}
+
+
+def test_without_a_ledger_the_wire_format_is_unchanged(app):
+    # Clients built on the hosted SDK decode these bodies; nothing may appear that the hosted API does not send.
+    with TestClient(app) as client:
+        assert set(client.post("/v1/systemone", json=PAYLOAD).json()) == {"model", "answers", "usage"}
+        assert client.post("/v1/decisions/x/outcome", json={"labels": {}}).status_code == 404

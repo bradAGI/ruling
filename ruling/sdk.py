@@ -24,6 +24,12 @@ class RulingClient:
         response.raise_for_status()
         return SystemOneResponse.model_validate(response.json())
 
+    def outcome(self, decision_id: str, labels: dict) -> dict:
+        """Report what turned out to be right for a logged decision; returns the labels as stored."""
+        response = self._http.post(f"/v1/decisions/{decision_id}/outcome", json={"labels": labels})
+        response.raise_for_status()
+        return response.json()["labels"]
+
     def models(self) -> list[ModelInfo]:
         response = self._http.get("/v1/models")
         response.raise_for_status()

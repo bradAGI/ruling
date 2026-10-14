@@ -159,6 +159,8 @@ class Usage(BaseModel):
 
 
 class SystemOneResponse(BaseModel):
+    id: str | None = None
+    """The decision's id in the server's ledger, for reporting its outcome; absent when nothing is logged."""
     model: str
     answers: dict[str, Answer]
     usage: Usage

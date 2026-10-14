@@ -17,6 +17,7 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from ruling.config import Settings
 from ruling.engine import InputTooLong
 from ruling.hosted import HostUnavailable
+from ruling.ledger import DecisionLedger, Outcome, UnknownDecision
 from ruling.questions import InvalidOptions, ModelList, SystemOneRequest, SystemOneResponse, check_askable
 from ruling.registry import Registry, UnknownModel
 
@@ -76,7 +77,8 @@ class Admission:
         return max(1, math.ceil(estimate))
 
 
-def create_app(registry: Registry, api_key: str | None, max_pending: int) -> FastAPI:
+def create_app(registry: Registry, api_key: str | None, max_pending: int,
+               ledger: DecisionLedger | None = None) -> FastAPI:
     app = FastAPI(title="ruling", version="0.2.0")
     bearer = HTTPBearer(auto_error=False)
     admission = Admission(max_pending)
@@ -98,7 +100,8 @@ def create_app(registry: Registry, api_key: str | None, max_pending: int) -> Fas
         message = first["msg"] + (f" (and {len(rest)} more)" if rest else "")
         return ApiError(422, "invalid_input", message, param).response()
 
-    @app.post("/v1/systemone", response_model=SystemOneResponse, dependencies=[Depends(authorize)])
+    @app.post("/v1/systemone", response_model=SystemOneResponse, response_model_exclude_none=True,
+              dependencies=[Depends(authorize)])
     async def system_one(request: SystemOneRequest) -> SystemOneResponse:
         try:
             name, engine = registry.resolve(request.model)
@@ -130,7 +133,22 @@ def create_app(registry: Registry, api_key: str | None, max_pending: int) -> Fas
                  name, len(request.questions), response.usage.input_tokens, elapsed * 1000)
         # An entry answers under its own name; the primary keeps the engine's report, which a
         # failover changes to say which side answered.
-        return response if name == registry.default else response.model_copy(update={"model": name})
+        if name != registry.default:
+            response = response.model_copy(update={"model": name})
+        if ledger is not None:
+            response = response.model_copy(update={"id": await run_in_threadpool(ledger.record, request, response)})
+        return response
+
+    if ledger is not None:
+        @app.post("/v1/decisions/{decision}/outcome", dependencies=[Depends(authorize)])
+        async def outcome(decision: str, body: Outcome) -> dict:
+            try:
+                record = await run_in_threadpool(ledger.outcome, decision, body.labels)
+            except UnknownDecision as exc:
+                raise ApiError(404, "unknown_decision", str(exc)) from exc
+            except ValueError as exc:
+                raise ApiError(422, "invalid_input", str(exc), "labels") from exc
+            return {"id": decision, "labels": record.labels}
 
     @app.get("/v1/models", response_model=ModelList, dependencies=[Depends(authorize)])
     def models() -> ModelList:
@@ -150,4 +168,5 @@ def create_app(registry: Registry, api_key: str | None, max_pending: int) -> Fas
 
 def app_from_env() -> FastAPI:
     settings = Settings.from_env()
-    return create_app(Registry.from_settings(settings), settings.api_key, settings.max_pending)
+    ledger = DecisionLedger(settings.ledger_path) if settings.ledger_path else None
+    return create_app(Registry.from_settings(settings), settings.api_key, settings.max_pending, ledger)
