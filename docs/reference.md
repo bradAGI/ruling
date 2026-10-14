@@ -25,7 +25,8 @@ The first start downloads the default model, `mlx-community/Qwen3.5-4B-4bit`
 | `RULING_MAX_BRANCH_TOKENS` | `32768` | Per-branch budget: state plus one question. A single oversized question is rejected even when the request fits |
 | `RULING_OPENAI_BASE_URL` | unset | Required for `openai:` models. The endpoint serving them, ending in `/v1` |
 | `RULING_OPENAI_API_KEY` | unset | Sent as a bearer token when the host wants one. Local servers usually do not |
-| `RULING_OPENAI_TOP_LOGPROBS` | `20` | How many top logprobs the host returns, which is also the option ceiling. OpenAI allows 20, `mlx_lm.server` allows 11 |
+| `RULING_OPENAI_TOP_LOGPROBS` | `20` | How many top logprobs the host returns, and so the widest Choice read in one pass; wider ones run in two stages. OpenAI allows 20, `mlx_lm.server` allows 11 |
+| `RULING_OPENAI_CONCURRENCY` | `16` | Calls in flight to the host per request. Set `1` for single-threaded hosts such as `mlx_lm.server`, which reset extra connections |
 | `RULING_OPENAI_EXTRA_BODY` | `{}` | JSON merged into every request, for host-specific fields such as `{"chat_template_kwargs": {"enable_thinking": false}}` |
 | `RULING_VLLM_BASE_URL` | unset | Required for `vllm:` models: the vLLM server, without a path. See [On NVIDIA: vLLM](#on-nvidia-vllm) |
 | `RULING_VLLM_API_KEY` | unset | Sent as a bearer token when the vLLM server was started with one |
@@ -85,14 +86,16 @@ python -m mlx_lm server --model mlx-community/Qwen3.5-4B-4bit --port 8080 &
 export RULING_MODEL=openai:mlx-community/Qwen3.5-4B-4bit
 export RULING_OPENAI_BASE_URL=http://127.0.0.1:8080/v1
 export RULING_OPENAI_TOP_LOGPROBS=11
+export RULING_OPENAI_CONCURRENCY=1
 export RULING_OPENAI_EXTRA_BODY='{"chat_template_kwargs": {"enable_thinking": false}}'
 uv run ruling eval datasets/authored144.jsonl
 ```
 
-What a hosted model costs you: the option ceiling drops from 255 to however
-many logprobs the host returns, there is no shared prefix cache so the state is
-re-read for every question, and a reasoning model has to be told to stop
-reasoning, differently on each host. What it buys: your model, your hardware,
+What a hosted model costs you: a Choice wider than the host's logprobs runs in
+two stages, one call per option and then a final call, where the local engine
+reads 62 options in one pass; there is no shared prefix cache, so the state is
+re-read for every question unless the host caches prefixes; and a reasoning
+model has to be told to stop reasoning, differently on each host. What it buys: your model, your hardware,
 any platform. An integration test runs this path end to end against a real
 server and checks the distributions match the local engine's.
 
@@ -364,8 +367,8 @@ for. Reproduce with `uv run --with pillow python assets/replay.py`.*
    log-probabilities are averaged. With `n` equal to the option count the
    result is exactly invariant to cyclic reordering of your options; there is a
    test for that.
-4. **Two-stage Choice.** Above 62 options (the tokenizer's single-token codes)
-   every option is first judged alone as a Noul, the strongest 8 go to a final
+4. **Two-stage Choice.** Above 62 options (the tokenizer's single-token codes),
+   or above `RULING_OPENAI_TOP_LOGPROBS` on an `openai:` host, every option is first judged alone as a Noul, the strongest 8 go to a final
    Choice, and the rest get probability 0.
 5. **Temperature scaling.** Log-probabilities are divided by a per-type
    temperature before the softmax. The temperature is 1 until you fit one.

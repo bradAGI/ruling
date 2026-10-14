@@ -102,6 +102,46 @@ class _Pass:
     tokens: list[int]
 
 
+class TwoStageChoice:
+    """Template method for engines that read at most `pass_options` options in one pass.
+
+    A Choice wider than that is first scored as a Noul per option; the strongest
+    few go to a final Choice, and every other option gets zero probability.
+    Subclasses supply `_score_plain` and `pass_options`.
+    """
+
+    pass_options: int
+
+    def _score_plain(self, state: State, questions: dict[str, Choice | Score | Noul]) -> Scored:
+        raise NotImplementedError
+
+    def score(self, state: State, questions: dict[str, Choice | Score | Noul]) -> Scored:
+        large = {qid: q for qid, q in questions.items()
+                 if isinstance(q, Choice) and len(q.criteria) > self.pass_options}
+        tokens = 0
+        reduced = dict(questions)
+        finalists: dict[str, list[str]] = {}
+        if large:
+            stage_one = self._score_plain(state, {
+                f"{qid}\x00{key}": Noul(instructions={"question": q.instructions, "candidate": {key: q.criteria[key]}})
+                for qid, q in large.items() for key in q.criteria
+            })
+            tokens += stage_one.input_tokens
+            for qid, q in large.items():
+                ranked = sorted(q.criteria, key=lambda key: -stage_one.raw[f"{qid}\x00{key}"].logits[0])
+                finalists[qid] = ranked[:STAGE_TWO_CANDIDATES]
+                reduced[qid] = Choice(instructions=q.instructions, criteria={k: q.criteria[k] for k in finalists[qid]})
+        scored = self._score_plain(state, reduced)
+        tokens += scored.input_tokens
+        raw = dict(scored.raw)
+        for qid, keys in finalists.items():
+            full = np.full(len(large[qid].criteria), -np.inf)
+            for key, value in zip(keys, scored.raw[qid].logits):
+                full[list(large[qid].criteria).index(key)] = value
+            raw[qid] = RawScore(keys=option_keys(large[qid]), logits=full)
+        return Scored(raw=raw, input_tokens=tokens)
+
+
 def answer(question: Choice | Score | Noul, raw: RawScore, calibration: Calibration) -> ChoiceAnswer | ScoreAnswer | NoulAnswer:
     """A typed answer from calibrated probabilities over the question's canonical keys."""
     probs = softmax(raw.logits, calibration.temperature(question.type))
@@ -189,7 +229,7 @@ def model_revision(model_id: str) -> str | None:
     return path.name if path.parent.name == "snapshots" else None
 
 
-class Engine:
+class Engine(TwoStageChoice):
     def __init__(
         self,
         model_id: str,
@@ -283,6 +323,10 @@ class Engine:
     def provenance(self) -> Provenance:
         return Provenance(self.model_id, self.revision, self.rotations, self.prior_debias, self.adapter)
 
+    @property
+    def pass_options(self) -> int:
+        return self.codes.max_options
+
     # ---- prompt assembly -------------------------------------------------
 
     def split_prompt(self, state: State, thinking: bool = False) -> tuple[str, str]:
@@ -315,32 +359,6 @@ class Engine:
         return True
 
     # ---- scoring -----------------------------------------------------------
-
-    def score(self, state: State, questions: dict[str, Choice | Score | Noul]) -> Scored:
-        large = {qid: q for qid, q in questions.items()
-                 if isinstance(q, Choice) and len(q.criteria) > self.codes.max_options}
-        tokens = 0
-        reduced = dict(questions)
-        finalists: dict[str, list[str]] = {}
-        if large:
-            stage_one = self._score_plain(state, {
-                f"{qid}\x00{key}": Noul(instructions={"question": q.instructions, "candidate": {key: q.criteria[key]}})
-                for qid, q in large.items() for key in q.criteria
-            })
-            tokens += stage_one.input_tokens
-            for qid, q in large.items():
-                ranked = sorted(q.criteria, key=lambda key: -stage_one.raw[f"{qid}\x00{key}"].logits[0])
-                finalists[qid] = ranked[:STAGE_TWO_CANDIDATES]
-                reduced[qid] = Choice(instructions=q.instructions, criteria={k: q.criteria[k] for k in finalists[qid]})
-        scored = self._score_plain(state, reduced)
-        tokens += scored.input_tokens
-        raw = dict(scored.raw)
-        for qid, keys in finalists.items():
-            full = np.full(len(large[qid].criteria), -np.inf)
-            for key, value in zip(keys, scored.raw[qid].logits):
-                full[list(large[qid].criteria).index(key)] = value
-            raw[qid] = RawScore(keys=option_keys(large[qid]), logits=full)
-        return Scored(raw=raw, input_tokens=tokens)
 
     def _score_plain(self, state: State, questions: dict[str, Choice | Score | Noul]) -> Scored:
         prefix_text, tail = self.split_prompt(state)

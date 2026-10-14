@@ -2,7 +2,9 @@ import math
 
 import pytest
 
+from ruling.config import Settings
 from ruling.hosted import Budget, BudgetExceeded, letter_log_probs
+from ruling.registry import build_engine
 
 
 def top(pairs):
@@ -51,3 +53,11 @@ def test_extremely_unlikely_tokens_do_not_underflow():
     result = letter_log_probs(top([("A", 0.0), ("B", -9999.0), ("<pad>", -float("inf"))]), ["A", "B", "C"])
     assert all(math.isfinite(v) for v in result)
     assert result[0] == pytest.approx(0.0, abs=1e-9) and result[1] < -9000 and result[2] < -9000
+
+
+def test_the_environment_sets_how_many_calls_a_hosted_engine_makes_at_once(monkeypatch):
+    # Single-threaded hosts such as mlx_lm.server reset connections beyond the first.
+    monkeypatch.setenv("RULING_MODEL", "openai:some-model")
+    monkeypatch.setenv("RULING_OPENAI_BASE_URL", "http://127.0.0.1:9/v1")
+    monkeypatch.setenv("RULING_OPENAI_CONCURRENCY", "1")
+    assert build_engine(Settings.from_env()).concurrency == 1

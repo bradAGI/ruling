@@ -108,7 +108,8 @@ def build_engine(settings: Settings):
         if not settings.openai_base_url:
             raise ValueError("set RULING_OPENAI_BASE_URL to the endpoint serving the model, ending in /v1")
         return HostedEngine(settings.model, calibration, settings.rotations, settings.openai_base_url,
-                            settings.openai_api_key, top_logprobs=settings.openai_top_logprobs,
+                            settings.openai_api_key, concurrency=settings.openai_concurrency,
+                            top_logprobs=settings.openai_top_logprobs,
                             extra_body=settings.openai_extra_body)
     if settings.model.startswith(OPENROUTER_PREFIX):
         if not settings.openrouter_providers:

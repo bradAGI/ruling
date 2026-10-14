@@ -23,7 +23,7 @@ import httpx
 import numpy as np
 
 from ruling.calibration import Calibration, Provenance
-from ruling.engine import InputTooLong, RawScore, Scored, answer
+from ruling.engine import InputTooLong, RawScore, Scored, TwoStageChoice, answer
 from ruling.prompt import SYSTEM_PROMPT, hosted_user_message, render_question
 from ruling.evals import answer_distribution
 from ruling.questions import (MAX_CHOICE_OPTIONS, Choice, InvalidOptions, Noul, Score, State, SystemOneRequest,
@@ -34,11 +34,11 @@ OPENROUTER_PREFIX = "openrouter:"
 HOSTED_PREFIX = "openai:"
 LETTERS = [chr(ord("A") + i) for i in range(20)]
 TOP_LOGPROBS = 20
-"""How many top logprobs a host will return, and so how many options a question may offer.
+"""How many top logprobs a host will return, and so how many options one pass can read.
 
 Hosts differ: OpenAI and OpenRouter allow 20, `mlx_lm.server` allows 11, vLLM is
-configurable. A host that allows fewer than a question has options cannot answer
-it, so the limit is reported as `max_options` rather than discovered at run time.
+configurable. A choice with more options than that is narrowed in two stages, so
+every letter a pass reads can appear in what the host returns.
 """
 
 
@@ -118,7 +118,7 @@ MISSING_LOGPROB_ATTEMPTS = 3
 """Hosts that advertise logprobs occasionally answer without them under load; the request is repeated this many times."""
 
 
-class HostedEngine:
+class HostedEngine(TwoStageChoice):
     """Scores typed questions with a model behind an OpenAI-compatible endpoint.
 
     Same interface as the local engines, so the server, the evaluation harness
@@ -142,7 +142,9 @@ class HostedEngine:
         # chat_template_kwargs, OpenRouter takes `reasoning`. Nothing is sent by
         # default, because OpenAI rejects body fields it does not know.
         self.extra_body = extra_body or {}
-        self.max_options = self.top_logprobs
+        self.pass_options = self.top_logprobs
+        self.max_options = MAX_CHOICE_OPTIONS
+        self.concurrency = concurrency
         # A hosted model's context is the host's business; ruling does not re-impose one.
         self.max_input_tokens = 1_000_000
         self.max_branch_tokens = self.max_input_tokens
@@ -188,10 +190,7 @@ class HostedEngine:
                 return rendered.keys, letter_log_probs(top, rendered.codes), int(data["usage"]["prompt_tokens"])
         raise RuntimeError(f"{self.remote} returned no logprobs in {MISSING_LOGPROB_ATTEMPTS} attempts (last host {data.get('provider')})")
 
-    def score(self, state: State, questions: dict[str, Choice | Score | Noul]) -> Scored:
-        for qid, question in questions.items():
-            if len(option_keys(question)) > self.max_options:
-                raise InvalidOptions(qid, f"a choice needs 2 to {self.max_options} options here, got {len(option_keys(question))}")
+    def _score_plain(self, state: State, questions: dict[str, Choice | Score | Noul]) -> Scored:
         jobs = [(qid, rotation) for qid, question in questions.items()
                 for rotation in range(2 if isinstance(question, Score) else len(option_keys(question)))
                 if rotation < self.rotations]

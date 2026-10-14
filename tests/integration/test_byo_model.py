@@ -14,8 +14,9 @@ import numpy as np
 import pytest
 
 from ruling.calibration import Calibration, softmax
+from ruling.engine import STAGE_TWO_CANDIDATES
 from ruling.hosted import HOSTED_PREFIX, HostedEngine
-from ruling.questions import Choice, Noul, SystemOneRequest
+from ruling.questions import MAX_CHOICE_OPTIONS, Choice, Noul, SystemOneRequest
 
 from .conftest import TEST_MODEL
 
@@ -53,13 +54,17 @@ def openai_server():
     process.wait(timeout=30)
 
 
-def test_typed_answers_from_a_model_behind_an_openai_endpoint(openai_server, single_engine):
+@pytest.fixture(scope="module")
+def hosted(openai_server):
     # mlx_lm.server answers one connection at a time, returns at most 11 top logprobs,
     # and needs chat_template_kwargs to stop a thinking model from opening with <think>.
-    hosted = HostedEngine(HOSTED_PREFIX + TEST_MODEL, Calibration(), rotations=1,
-                          base_url=openai_server, concurrency=1, top_logprobs=11,
-                          extra_body={"chat_template_kwargs": {"enable_thinking": False}})
-    assert hosted.max_options == 11
+    return HostedEngine(HOSTED_PREFIX + TEST_MODEL, Calibration(), rotations=1,
+                        base_url=openai_server, concurrency=1, top_logprobs=11,
+                        extra_body={"chat_template_kwargs": {"enable_thinking": False}})
+
+
+def test_typed_answers_from_a_model_behind_an_openai_endpoint(hosted, single_engine):
+    assert hosted.pass_options == 11
     request = SystemOneRequest(
         state=STATE,
         questions={"color": COLOR, "blue": Noul(instructions="The sky is described as blue.")},
@@ -76,3 +81,13 @@ def test_typed_answers_from_a_model_behind_an_openai_endpoint(openai_server, sin
     remote = hosted.score(STATE, {"color": COLOR}).raw["color"]
     assert local.keys == remote.keys
     assert np.allclose(softmax(local.logits), softmax(remote.logits), atol=0.1)
+
+
+def test_a_choice_wider_than_the_hosts_logprobs_runs_in_two_stages(hosted):
+    keys = [f"tool{i}" for i in range(30)]
+    keys.insert(17, "apple")
+    question = Choice(instructions="Which one is a fruit?", criteria={k: None for k in keys})
+    answer = hosted.evaluate(SystemOneRequest(state="Pick the fruit.", questions={"q": question})).answers["q"]
+    assert answer.choice == "apple" and set(answer.probabilities) == set(keys)
+    assert sum(p > 0 for p in answer.probabilities.values()) <= STAGE_TWO_CANDIDATES
+    assert hosted.max_options == MAX_CHOICE_OPTIONS

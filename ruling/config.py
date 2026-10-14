@@ -61,6 +61,7 @@ class Settings:
     openai_base_url: str = ""
     openai_api_key: str | None = None
     openai_top_logprobs: int = TOP_LOGPROBS
+    openai_concurrency: int = 16
     openai_extra_body: dict = field(default_factory=dict)
     vllm_base_url: str = ""
     vllm_api_key: str | None = None
@@ -94,6 +95,7 @@ class Settings:
             openai_base_url=env.get("RULING_OPENAI_BASE_URL", cls.openai_base_url),
             openai_api_key=env.get("RULING_OPENAI_API_KEY") or None,
             openai_top_logprobs=int(env.get("RULING_OPENAI_TOP_LOGPROBS", cls.openai_top_logprobs)),
+            openai_concurrency=int(env.get("RULING_OPENAI_CONCURRENCY", cls.openai_concurrency)),
             openai_extra_body=json.loads(env.get("RULING_OPENAI_EXTRA_BODY", "{}")),
             vllm_base_url=env.get("RULING_VLLM_BASE_URL", cls.vllm_base_url),
             vllm_api_key=env.get("RULING_VLLM_API_KEY") or None,
