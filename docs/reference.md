@@ -162,6 +162,24 @@ questions. vLLM also serves Cloudflare's Clef-flash, Clef-omni and Liquid's
 d1 on the same endpoint with their own prompts, so `vllm:Cloudflare/clef-flash`
 is the hosted equivalent of the MLX port used in the measurements.
 
+Until that endpoint is in a release, a stock vLLM works through the `openai:`
+path, with ruling itself on Linux using MLX's CPU wheel (it holds no weights
+there, only the HTTP client):
+
+```bash
+vllm serve Qwen/Qwen3-4B-Instruct-2507 --max-logprobs 20 --enable-prefix-caching
+pip install ruling 'mlx[cpu]'      # from a checkout: uv pip install . 'mlx[cpu]'
+RULING_MODEL=openai:Qwen/Qwen3-4B-Instruct-2507 RULING_OPENAI_BASE_URL=http://127.0.0.1:8000/v1 \
+  RULING_OPENAI_EXTRA_BODY='{"chat_template_kwargs": {"enable_thinking": false}}' ruling serve
+```
+
+Checked on 14 October 2026 on one NVIDIA L4 with vLLM 0.31.0: ruling's unit
+tests pass on Linux, `ruling eval` scored authored144 at three orderings in
+35 s (121 of 144, against 126 for the same model at 4-bit on a Mac), a
+77-option choice was answered in two stages in 2.2 s, and three questions took
+150 ms at the median. vLLM 0.31.0 crashed there while capturing CUDA graphs;
+`--enforce-eager` avoids it, at some cost in speed.
+
 ## Training
 
 `ruling train --data RECORDS... --output DIR` LoRA-fine-tunes the answer
