@@ -28,8 +28,15 @@ export class RulingClient {
     return data;
   }
 
-  systemOne({ state, questions, model }) {
-    return this.#request("POST", "/v1/systemone", { state, questions, model: model ?? null });
+  systemOne({ state, questions, model, excludeFromTraining }) {
+    // The flag goes only when set, as Endor's client sends it, so every other body is exactly System One's.
+    const body = { state, questions, model: model ?? null, ...(excludeFromTraining && { exclude_from_training: true }) };
+    return this.#request("POST", "/v1/systemone", body);
+  }
+
+  async outcome(decisionId, labels) {
+    const body = await this.#request("POST", `/v1/decisions/${encodeURIComponent(decisionId)}/outcome`, { labels });
+    return body.labels;
   }
 
   async models() {

@@ -19,3 +19,7 @@ if (answers.team.confidence > 0.8 && answers.refund.noul > 0.9) routeToBilling()
 
 Pass `apiKey` when the server runs with `RULING_API_KEY`. Errors throw `RulingError`
 with the HTTP status and the server's detail.
+
+When the server keeps a ledger (`RULING_LEDGER`), each response has an `id`;
+`client.outcome(id, { team: "billing" })` reports what turned out to be right,
+and `systemOne({ ..., excludeFromTraining: true })` keeps a decision out of it.

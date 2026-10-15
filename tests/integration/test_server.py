@@ -141,6 +141,29 @@ console.log(JSON.stringify({{ team: r.answers.team.choice, refund: r.answers.ref
     assert data["team"] == "billing" and data["refund"] > 0.5 and data["models"] == 1
 
 
+def test_typescript_sdk_reports_outcomes_and_opts_out_of_the_ledger(engine, tmp_path):
+    ledger = tmp_path / "ledger.sqlite"
+    server, thread, url = _serve(create_app(Registry.single(engine), None, 4, DecisionLedger(ledger)))
+    script = f"""
+import {{ RulingClient, noul }} from {json.dumps(TS_SDK.as_uri())};
+const client = new RulingClient({{ baseUrl: {json.dumps(url)} }});
+const questions = {{ refund: noul("The customer asks for a refund.") }};
+const logged = await client.systemOne({{ state: {json.dumps(PAYLOAD["state"])}, questions }});
+const stored = await client.outcome(logged.id, {{ refund: true }});
+const excluded = await client.systemOne({{ state: "A benchmark row.", questions, excludeFromTraining: true }});
+console.log(JSON.stringify({{ stored, excludedId: excluded.id ?? null }}));
+"""
+    try:
+        result = subprocess.run(["node", "--input-type=module", "-e", script], capture_output=True, text=True,
+                                timeout=120)
+    finally:
+        server.should_exit = True
+        thread.join(timeout=10)
+    assert result.returncode == 0, result.stderr
+    assert json.loads(result.stdout.strip().splitlines()[-1]) == {"stored": {"refund": True}, "excludedId": None}
+    assert [r.labels for r in DecisionLedger(ledger).records()] == [{"refund": True}]
+
+
 def test_official_typesafe_sdk_against_live_server(live_server_with_key, engine, monkeypatch):
     """TypeSafe's own client, unmodified, pointed at ruling by environment variable alone."""
     from typesafe_sdk import Choice, Noul, Score, TypeSafeClient

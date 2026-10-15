@@ -13,6 +13,8 @@ export interface NoulAnswer { type: "noul"; noul: number }
 export type Answer = ChoiceAnswer | ScoreAnswer | NoulAnswer;
 
 export interface SystemOneResponse<Q extends Record<string, Question>> {
+  /** Present when the server keeps a ledger: the decision to report an outcome for. */
+  id?: string;
   model: string;
   answers: { [K in keyof Q]: Q[K] extends Choice ? ChoiceAnswer : Q[K] extends Score ? ScoreAnswer : NoulAnswer };
   usage: { input_tokens: number; output_tokens: number };
@@ -25,6 +27,9 @@ export interface ModelInfo {
   max_options: number; rotations: number; prior_debias: boolean;
 }
 
+/** A hard label (option key, level index, true/false) or a distribution over every option. */
+export type Label = string | number | boolean | number[] | Record<string, number>;
+
 export interface ApiError { code: string; message: string; param?: string }
 
 export function choice(instructions: Text, criteria: Record<string, Text | null>): Choice;
@@ -35,6 +40,7 @@ export class RulingError extends Error { status: number; detail: ApiError | unkn
 
 export class RulingClient {
   constructor(options?: { baseUrl?: string; apiKey?: string; fetch?: typeof fetch });
-  systemOne<Q extends Record<string, Question>>(input: { state: State; questions: Q; model?: string }): Promise<SystemOneResponse<Q>>;
+  systemOne<Q extends Record<string, Question>>(input: { state: State; questions: Q; model?: string; excludeFromTraining?: boolean }): Promise<SystemOneResponse<Q>>;
+  outcome(decisionId: string, labels: Record<string, Label>): Promise<Record<string, Label>>;
   models(): Promise<ModelInfo[]>;
 }
