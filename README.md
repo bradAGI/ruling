@@ -37,6 +37,7 @@ curl -s localhost:8010/v1/systemone -H 'content-type: application/json' -d '{
 
 ```json
 {
+  "model": "mlx-community/Qwen3.5-4B-4bit",
   "answers": {
     "team":    {"type": "choice", "choice": "billing",
                 "probabilities": {"billing": 0.997, "technical": 0.002, "sales": 0.001}, "confidence": 0.995},
@@ -167,7 +168,8 @@ three- to thirteen-fold. Full card and reproduction in
 [docs/adapter.md](docs/adapter.md).
 
 **Then keep learning from production.** Set `RULING_LEDGER=ledger.sqlite` and
-the server records every decision and returns its `id`; post what turned out
+the server records every decision and returns its `id` (a request can opt out
+with `exclude_from_training`); post what turned out
 to be right to `/v1/decisions/<id>/outcome`, and `ruling export-decisions`
 turns the resolved ones into training records for step 2. See
 [Learn from your own traffic](docs/reference.md#learn-from-your-own-traffic).
@@ -308,12 +310,14 @@ and the confidence formulas, is in [docs/reference.md](docs/reference.md#how-it-
 
 - Probabilities are model scores. Calibration makes them honest on average on
   data like your calibration set; it does not make any single answer right.
-- One request at a time. Questions inside a request are batched; concurrent
-  requests queue behind a lock.
+- A local MLX model answers one request at a time; questions inside a request
+  are batched. Up to `RULING_MAX_PENDING` requests wait their turn, and the
+  next is refused with 429 and a `Retry-After`.
 - Text only. No images, no audio, no generated explanation.
-- The native engine is MLX, so the fast path is Apple Silicon. Other hardware
-  runs through `openai:` against vLLM or llama.cpp, without the shared prefix
-  cache.
+- The native engine is MLX, so the fast path is Apple Silicon. On NVIDIA,
+  ruling serves through `vllm:` (vLLM's own decision endpoint) or `openai:`
+  against a stock vLLM or llama.cpp; see
+  [docs/reference.md](docs/reference.md#on-nvidia-vllm).
 
 ## Layout
 
@@ -324,13 +328,13 @@ sdks/typescript/   zero-dependency JS client with TypeScript types
 datasets/          labeled JSONL fixtures and the record format
 docs/              reference.md (settings, API, clients), measurements.md (the full record),
                    background.md (what Jev is, the other recreations), adapter.md (the model card)
-assets/            figures and the scripts that redraw them from the evaluation JSON
+assets/            figures and the scripts that redraw them from local evaluation runs (runs/, not committed)
 tests/             unit (no model) and integration (real model, downloads Qwen3.5-0.8B on first run)
 ```
 
 ```bash
 uv run pytest tests/unit
-uv run pytest tests/integration                 # CI runs this with -m "not heavy": the two training modules need a GPU
+uv run pytest tests/integration                 # CI runs this with -m "not heavy": the training, PEFT and encoder modules need a GPU
 ```
 
 ## Related work

@@ -40,17 +40,26 @@ three-ordering accuracy at roughly half the latency.
 ## How to reproduce it
 
 ```bash
-uv run ruling build-corpus public  --output runs/pool/public.jsonl
-uv run ruling build-corpus states  --output runs/pool/states.jsonl
-uv run ruling build-corpus worlds  --output runs/pool/worlds.jsonl
+uv run ruling build-dataset typesafe --output runs/eval/typesafe102.jsonl
+uv run ruling build-dataset every    --output runs/eval/every.jsonl
+uv run ruling build-dataset wanli    --output runs/eval/wanli256.jsonl
+uv run ruling build-dataset sst5     --output runs/eval/sst5.jsonl --limit 300
+uv run ruling build-dataset dev      --output runs/eval/dev.jsonl --limit 200
+uv run ruling build-corpus public --count 3000 --seed 0  --output runs/pool/public.jsonl
+uv run ruling build-corpus states --count 6000 --seed 11 --output runs/pool/states.jsonl
+uv run ruling build-corpus worlds --count 3800 --seed 2  --output runs/pool/worlds.jsonl \
+  --writer mlx-community/Qwen3.6-35B-A3B-4bit
 uv run ruling train \
   --data runs/pool/public.jsonl runs/pool/states.jsonl runs/pool/worlds.jsonl \
-  --holdout datasets/authored144.jsonl datasets/perturbations108.jsonl \
+  --holdout datasets/authored144.jsonl datasets/perturbations108.jsonl runs/eval/typesafe102.jsonl \
+            runs/eval/every.jsonl runs/eval/wanli256.jsonl runs/eval/sst5.jsonl runs/eval/dev.jsonl \
   --model mlx-community/Qwen3-4B-Instruct-2507-4bit --output runs/adapters/v1
 ```
 
-About 40 minutes on an Apple Silicon Mac. The trainer refuses to start if any
-training state also appears in a `--holdout` file.
+About 40 minutes of training on an Apple Silicon Mac. The trainer refuses to
+start if any training state also appears in a `--holdout` file; the run behind
+this card first removed the 76 that did (50 public, 26 program states), which
+leaves the 27,021 records above.
 
 The trainer also takes three optional calibration terms, off by default and
 not used for this adapter: `--label-smoothing`, `--brier-weight` and

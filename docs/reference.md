@@ -21,13 +21,16 @@ The first start downloads the default model, `mlx-community/Qwen3.5-4B-4bit`
 | `RULING_PRIOR_DEBIAS` | `false` | Subtract a content-free letter prior. Measured, does not help; kept so you can re-check with another model |
 | `RULING_CALIBRATION` | unset | Path to a `calibration.json` written by `ruling calibrate` |
 | `RULING_API_KEY` | unset | When set, `/v1/*` requires `Authorization: Bearer <key>` |
-| `RULING_MAX_INPUT_TOKENS` | `65536` | Whole-request budget: state plus every question. Above this the request is rejected with 422 `context_too_long` |
-| `RULING_MAX_BRANCH_TOKENS` | `32768` | Per-branch budget: state plus one question. A single oversized question is rejected even when the request fits |
+| `RULING_MAX_INPUT_TOKENS` | `65536` | Whole-request budget for a local MLX model: state plus every question. Above this the request is rejected with 422 `context_too_long`. Remote models (`openai:`, `vllm:`, `typesafe:`) are held to their host's own limit instead |
+| `RULING_MAX_BRANCH_TOKENS` | `32768` | Per-branch budget for a local MLX model: state plus one question. A single oversized question is rejected even when the request fits |
+| `RULING_MEMORY_FRACTION`, `RULING_CACHE_LIMIT_GB` | `0.5`, `4` | MLX's ceiling as a share of physical memory, and how much freed buffer memory it may keep. A job that cannot fit raises instead of swapping. Ignored where the backend reports no memory size (Linux CPU) |
 | `RULING_OPENAI_BASE_URL` | unset | Required for `openai:` models. The endpoint serving them, ending in `/v1` |
 | `RULING_OPENAI_API_KEY` | unset | Sent as a bearer token when the host wants one. Local servers usually do not |
-| `RULING_OPENAI_TOP_LOGPROBS` | `20` | How many top logprobs the host returns, and so the widest Choice read in one pass; wider ones run in two stages. OpenAI allows 20, `mlx_lm.server` allows 11 |
+| `RULING_OPENAI_TOP_LOGPROBS` | `20` | How many top logprobs the host returns, and so the widest Choice read in one pass; wider ones run in two stages. At most 20. OpenAI allows 20, `mlx_lm.server` allows 11 |
 | `RULING_OPENAI_CONCURRENCY` | `16` | Calls in flight to the host per request. Set `1` for single-threaded hosts such as `mlx_lm.server`, which reset extra connections |
 | `RULING_OPENAI_EXTRA_BODY` | `{}` | JSON merged into every request, for host-specific fields such as `{"chat_template_kwargs": {"enable_thinking": false}}` |
+| `RULING_OPENROUTER_PROVIDERS` | unset | Required for `openrouter:` models: comma-separated providers allowed to serve them, so every request reaches a host that returns logprobs. The key is `OPENROUTER_API_KEY` |
+| `RULING_OPENROUTER_BUDGET_USD` | `1.0` | Dollars an `openrouter:` engine may spend per process; past it, further requests fail |
 | `RULING_VLLM_BASE_URL` | unset | Required for `vllm:` models: the vLLM server, without a path. See [On NVIDIA: vLLM](#on-nvidia-vllm) |
 | `RULING_VLLM_API_KEY` | unset | Sent as a bearer token when the vLLM server was started with one |
 | `RULING_ADAPTER` | unset | A LoRA directory from `ruling train` or `ruling import-adapter`; see [docs/adapter.md](adapter.md) |
@@ -35,7 +38,7 @@ The first start downloads the default model, `mlx-community/Qwen3.5-4B-4bit`
 | `RULING_CASCADE_THRESHOLD` | unset | Top probability below which a question is escalated; required with `RULING_CASCADE_TO` |
 | `RULING_FAILOVER_TO` | unset | A model that answers the whole request whenever the primary is unavailable (429, 502–504, or a timeout); the response's `model` names whichever answered |
 | `RULING_MODELS` | unset | A JSON file of further models to serve by name beside the primary; see [Serve several models](#serve-several-models) |
-| `RULING_LEDGER` | unset | A SQLite file that records every answered request, its state included, so outcomes can be reported and the decisions retrained on; see [Learn from your own traffic](#learn-from-your-own-traffic) |
+| `RULING_LEDGER` | unset | A SQLite file that records every answered request not marked `exclude_from_training`, its state included, so outcomes can be reported and the decisions retrained on; see [Learn from your own traffic](#learn-from-your-own-traffic) |
 | `RULING_MAX_PENDING` | `64` | Requests allowed in flight at once. The next one is refused with 429 `queue_full` and a `Retry-After` estimated from the queue and recent latency |
 | `RULING_HOST`, `RULING_PORT` | `127.0.0.1`, `8010` | Bind address |
 
@@ -234,6 +237,7 @@ and its response has no `id`.
 ```json
 {
   "model": "optional; a name from GET /v1/models, or default for the primary",
+  "exclude_from_training": "optional, default false; true keeps the decision out of the ledger",
   "state": "string, object, or array",
   "questions": {
     "<id>": {"type": "choice", "instructions": "...", "criteria": {"<key>": "description, JSON, or null"}},
@@ -277,15 +281,17 @@ Errors come in the hosted API's shape, `{"error": {"code", "message",
 | 422 | `invalid_input` | a malformed request: `param` names the field, such as a choice over 255 options, a score over 10 levels, or more than 64 questions |
 | 422 | `invalid_options` | a well-formed question the model cannot answer: a choice with one option or more than the model reads, or nothing to ask; `param` is `questions.<id>` |
 | 422 | `context_too_long` | a request over a token limit; `param` is `questions.<id>` when one question is at fault |
+| 422 | `invalid_input` | without `param`: a request the engine refuses, such as one a remote decision server rejects; on the outcome route, `param` is `labels` for a label that does not fit the logged question |
 | 404 | `unknown_model` | a `model` the server does not answer for; the message lists the names it does |
 | 404 | `unknown_decision` | an outcome for an id the ledger does not hold |
 | 401 | `unauthorized` | an API key is configured and missing or wrong |
 | 429 | `queue_full` | `RULING_MAX_PENDING` requests are already in flight; `Retry-After` says how many seconds to wait |
-| 503 | `upstream_unavailable` | the primary is a hosted model and it is down, with no failover |
+| 503 | `upstream_unavailable` | the selected model is served remotely and its host is down, with no failover |
 
 TypeSafe's SDK reads `error.message` from this shape and retries 429 honoring
-`Retry-After`, so both clients and rulesmith behave the same against ruling
-and the hosted services.
+`Retry-After`, so both clients and
+[rulesmith](https://github.com/bradAGI/rulesmith), which uses ruling as its
+local judge, behave the same against ruling and the hosted services.
 
 `GET /v1/models` returns `{"models": [...]}` with the hosted API's `name`,
 `description` and `release_date`, plus `base` (the weights behind the name),
@@ -366,6 +372,12 @@ if team.confidence < 0.5:
 elif team.choice == "technical" and response.answers["blocked"].noul > 0.9:
     page_on_call()
 ```
+
+`RulingClient(api_key=...)` (or `RULING_API_KEY`, the server's own variable)
+talks to a server that requires a key. With a ledger, `response.id` and
+`client.outcome(response.id, {"team": "billing"})` report what was right, and
+`system_one(..., exclude_from_training=True)` keeps a decision out of it.
+`client.models()` lists the served models.
 
 TypeScript and JavaScript, zero dependencies, in [`sdks/typescript`](../sdks/typescript):
 

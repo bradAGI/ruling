@@ -40,6 +40,7 @@ one question named `decision`. See the
 | `authored144.jsonl` | 144 | one Choice each, three families | Converted from the project-authored fixture in [TheoLeeCJ/openjev](https://github.com/TheoLeeCJ/openjev) (MIT, Copyright (c) 2026 TheoLeeCJ, notice in [THIRD_PARTY.md](../THIRD_PARTY.md)). Question text, options, and labels are unchanged. |
 | `perturbations108.jsonl` | 108 | one Choice each | Same source. 36 base cases under three meaning-preserving edits: options reversed, the criterion wrapped in extra wording, and irrelevant context added. Used to measure robustness, not to pick defaults. |
 | `support_tickets.jsonl` | 12 | Choice + Score + Noul per record | Written for this project. Small: it exists to exercise all three primitives, not to rank models. |
+| `worlds.json` | 10 worlds, 7 styles | catalog, not records | Written for this project. The world templates and writing styles `ruling build-corpus worlds` samples from (its default `--catalog`) to synthesize training records. |
 | `wanli256-selection.jsonl` | 256 | manifest only | The row selection TheoLeeCJ/openjev published for its WANLI evaluation, vendored so `ruling build-dataset wanli` rebuilds exactly those rows. |
 | `typesafe102-selection.jsonl` | 102 | manifest only | TheoLeeCJ/openjev's alignment of TypeSafe's public evaluation cases, with a hash of each workflow payload. `ruling build-dataset typesafe` rebuilds exactly those rows and refuses if TypeSafe's payloads change. |
 

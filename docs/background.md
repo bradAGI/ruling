@@ -58,7 +58,7 @@ Both read option logits from a Qwen3.5-4B model; everything above that differs.
 |---|---|---|
 | Form | Research CLI: JSONL of questions in, results file out | Service: HTTP endpoint with Jev's request and response shape, Python and TypeScript clients, playground, one-shot CLI |
 | Question types | One: pick from up to 16 lettered options | Three, matching Jev: Choice to 255 options, Score, Noul, each with probabilities and confidence |
-| Questions per call | One per row | Any number against one state, one request |
+| Questions per call | One per row | Up to 64 against one state, one request |
 | Shared-state reuse | Special mode; every row must carry the identical state | Always: state encoded once, all question suffixes in one batched forward pass |
 | Option-order bias | Measured it, 10 of 36 flips, left it | Averaged over orderings; 4 of 144 flips |
 | Calibration | None | Temperature scaling, bound to the model it was fit on |

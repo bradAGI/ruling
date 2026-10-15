@@ -162,13 +162,16 @@ options reversed, counting answers that flip:
 
 The adapter weights are not published; the corpus and the run that produced
 them are. `ruling build-corpus public|states|worlds` rebuilds the training
-records from pinned public datasets and the generators in this repository, and
-the command below reproduces the adapter on a Mac in about 40 minutes:
+records from pinned public datasets and the generators in this repository
+([the full recipe](adapter.md#how-to-reproduce-it), with counts, seeds and
+every held-out set), and the command below reproduces the adapter on a Mac in
+about 40 minutes:
 
 ```bash
 uv run ruling train \
   --data runs/pool/public.jsonl runs/pool/states.jsonl runs/pool/worlds.jsonl \
-  --holdout datasets/authored144.jsonl datasets/perturbations108.jsonl \
+  --holdout datasets/authored144.jsonl datasets/perturbations108.jsonl runs/eval/typesafe102.jsonl \
+            runs/eval/every.jsonl runs/eval/wanli256.jsonl runs/eval/sst5.jsonl runs/eval/dev.jsonl \
   --model mlx-community/Qwen3-4B-Instruct-2507-4bit --output runs/adapters/v1
 ```
 
