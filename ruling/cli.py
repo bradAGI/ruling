@@ -178,10 +178,10 @@ def main(argv: list[str] | None = None) -> None:
             _report_spend(writer)
             return
         if args.kind == "answers":
+            from ruling.distill import unanswered
             records = load_dataset(args.questions)
-            done = sum(1 for line in args.output.open() if line.strip()) if args.output.exists() else 0
-            pending = records[done:]
-            print(f"{done} already answered, {len(pending)} to go")
+            pending = unanswered(records, args.output)
+            print(f"{len(records) - len(pending)} already answered, {len(pending)} to go")
             if args.teacher == "typesafe":
                 from ruling.against import live_answers
                 answered = (pending[i].model_copy(update={"references": {qid: {"target": t} for qid, t in answers.items()}})

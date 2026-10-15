@@ -33,3 +33,17 @@ def test_rejects_choices_with_too_many_options_and_bad_json():
 def test_writer_prompt_carries_the_state_and_count():
     messages = writer_messages({"order": 42, "status": "late"}, 6)
     assert '"order": 42' in messages[-1]["content"] and "6" in messages[-1]["content"]
+
+
+def test_a_resumed_run_answers_only_the_records_not_yet_written(tmp_path):
+    from ruling.distill import unanswered
+    from ruling.evals import Record
+
+    question = {"q": {"type": "noul", "instructions": "It is about money."}}
+    too_long, paid, shipped = (Record(state=s, questions=question) for s in ("word " * 9, "Paid twice.", "Lost parcel."))
+    written = tmp_path / "answers.jsonl"
+    # A record too long to answer leaves no line, so the first line written belongs to the second record.
+    answered = paid.model_copy(update={"references": {"q": {"target": {"no": 0.2, "yes": 0.8}}}})
+    written.write_text(answered.model_dump_json() + "\n")
+    assert unanswered([too_long, paid, shipped], written) == [too_long, shipped]
+    assert unanswered([paid], tmp_path / "missing.jsonl") == [paid]

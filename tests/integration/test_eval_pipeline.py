@@ -129,3 +129,18 @@ def test_cli_predict_answers_every_row_in_order_and_resumes(tmp_path, monkeypatc
     output.write_text("".join(json.dumps(line) + "\n" for line in first[:1]))
     main(command)
     assert [json.loads(line) for line in output.read_text().splitlines()] == first
+
+
+def test_cli_teacher_answers_resume_without_duplicates_past_a_row_too_long(tmp_path, monkeypatch, engine):
+    question = {"q": {"type": "noul", "instructions": "It is about money."}}
+    rows = [{"state": "word " * 20000, "questions": question}, {"state": "Paid twice.", "questions": question}]
+    source, output = tmp_path / "questions.jsonl", tmp_path / "answers.jsonl"
+    source.write_text("".join(json.dumps(r) + "\n" for r in rows))
+    monkeypatch.setenv("RULING_MAX_INPUT_TOKENS", str(engine.max_input_tokens))
+    command = ["build-corpus", "answers", "--questions", str(source), "--output", str(output),
+               "--writer", engine.model_id, "--rotations", "1"]
+    main(command)
+    with source.open("a") as more:
+        more.write(json.dumps({"state": "Lost parcel.", "questions": question}) + "\n")
+    main(command)
+    assert [r.state for r in load_dataset(output)] == ["Paid twice.", "Lost parcel."]

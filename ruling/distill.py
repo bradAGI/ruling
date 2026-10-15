@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import re
+from pathlib import Path
 
 import mlx.core as mx
 from mlx_lm import batch_generate
@@ -21,7 +22,7 @@ from pydantic import TypeAdapter, ValidationError
 
 from ruling.calibration import softmax
 from ruling.engine import TEMPLATE_KWARGS, Engine, InputTooLong
-from ruling.evals import Record
+from ruling.evals import Record, load_dataset
 from ruling.questions import InvalidOptions, Question, State, check_askable
 
 WRITER_SYSTEM = ("You design evaluation questions for software that makes fast judgments about documents. "
@@ -102,6 +103,19 @@ def local_generator(engine: Engine, seed: int, temperature: float):
         return batch_generate(engine.model, engine.tokenizer, tokens, max_tokens=1200, sampler=sampler).texts
 
     return generate
+
+
+def unanswered(records: list[Record], written: Path) -> list[Record]:
+    """The records whose answers are not yet in `written`, matched by state and questions.
+
+    A record too long to answer leaves no line, so counting lines would misplace
+    the resume point and answer some records twice.
+    """
+    if not written.exists():
+        return records
+    key = lambda r: json.dumps([r.state, {qid: q.model_dump() for qid, q in r.questions.items()}], sort_keys=True)
+    done = {key(r) for r in load_dataset(written)}
+    return [r for r in records if key(r) not in done]
 
 
 def answer_locally(records: list[Record], engine, log=print):
