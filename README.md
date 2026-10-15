@@ -313,6 +313,9 @@ and the confidence formulas, is in [docs/reference.md](docs/reference.md#how-it-
 - A local MLX model answers one request at a time; questions inside a request
   are batched. Up to `RULING_MAX_PENDING` requests wait their turn, and the
   next is refused with 429 and a `Retry-After`.
+- The state is untrusted input: text in it can steer the answers (prompt
+  injection), as with any model that reads it. Put independent checks in front
+  of security-sensitive actions rather than acting on an answer alone.
 - Text only. No images, no audio, no generated explanation.
 - The native engine is MLX, so the fast path is Apple Silicon. On NVIDIA,
   ruling serves through `vllm:` (vLLM's own decision endpoint) or `openai:`
