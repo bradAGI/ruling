@@ -430,6 +430,22 @@ one-hot on the label. Each block is `{"n": 0}` when nothing is in scope, else:
 
 The keys and the four thresholds are fixed: other tools read them by name.
 
+### Answer many rows at once
+
+`ruling predict ROWS --output ANSWERS` answers every question of every row in
+any dataset form above, labels ignored, without a server. It writes one JSON
+line per row, in the rows' order: `{"id", "answers"}` with each answer exactly
+as `/v1/systemone` returns it, or `{"id", "error": {"code", "message"}}` with
+the API's code (`context_too_long`, `invalid_options`) for a row the model
+cannot answer, so line *i* is always row *i*. Each line is written as it is
+answered; run the same command again after an interruption and it carries on
+after the last line. It takes the same `--model`, `--adapter`, `--calibration`
+and `--rotations` as `ruling eval`.
+
+To turn a strong model's answers into training targets for a small one, use
+`ruling build-corpus answers --questions ROWS --writer MODEL` instead: it keeps
+each answer's full distribution as a soft label.
+
 ## How it works
 
 ![Measured replay: ruling returns every typed answer at once while the same model streams JSON token by token](../assets/replay.gif)

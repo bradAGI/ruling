@@ -17,7 +17,7 @@ from ruling.build import build_every, build_sst5, build_typesafe, build_wanli, w
 from ruling.calibration import Calibration
 from ruling.config import Settings, configure_memory
 from ruling.engine import Engine
-from ruling.evals import collect, fit, load_dataset, report, write_json, write_predictions
+from ruling.evals import collect, fit, load_dataset, predict, report, write_json, write_predictions
 from ruling.questions import Choice, Noul, Score, SystemOneRequest
 from ruling.hosted import OpenRouterEngine
 from ruling.registry import build_engine
@@ -58,6 +58,12 @@ def main(argv: list[str] | None = None) -> None:
             sub.add_argument("--against", choices=["typesafe"],
                              help="also send every record to the hosted TypeSafe API (TYPESAFE_API_KEY) and report agreement")
             sub.add_argument("--typesafe-model", help="model alias for --against typesafe; the service default when omitted")
+
+    predicted = commands.add_parser("predict", help="answer every question of every row, labels ignored, as JSONL")
+    predicted.add_argument("rows", type=Path, help="records or hosted-platform rows, .jsonl or a .json array")
+    predicted.add_argument("--output", type=Path, required=True,
+                           help="one line per row, in order; a run that stops resumes after the last line written")
+    _engine_overrides(predicted)
 
     build = commands.add_parser("build-dataset", help="download a pinned public dataset into ruling format")
     build.add_argument("name", choices=["wanli", "sst5", "typesafe", "every", "dev"])
@@ -282,6 +288,16 @@ def main(argv: list[str] | None = None) -> None:
             parser.error("ask needs at least one --choice, --score, or --noul")
         response = engine.evaluate(SystemOneRequest(state=state, questions=questions))
         print(response.model_dump_json(indent=2))
+        return
+
+    if args.command == "predict":
+        records = load_dataset(args.rows)
+        done = sum(1 for line in args.output.open() if line.strip()) if args.output.exists() else 0
+        with args.output.open("a") as out:
+            for line in predict(engine, records[done:]):
+                out.write(json.dumps(line) + "\n")
+                out.flush()
+        print(f"wrote {len(records) - done} rows to {args.output} ({done} were already there)")
         return
 
     records = load_dataset(args.dataset)

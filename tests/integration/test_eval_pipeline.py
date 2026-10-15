@@ -96,3 +96,36 @@ def test_cli_eval_scores_hosted_rows_from_a_json_array(tmp_path, capsys, monkeyp
     assert {t: m["n"] for t, m in data["by_type"].items()} == {"choice": 1, "score": 1, "noul": 2}
     assert data["by_question"]["decision"]["n"] == 1
     assert data["question_types"]["choice"]["count"] == 2 and data["question_types"]["choice"]["labeled_count"] == 1
+
+
+def test_cli_predict_answers_every_row_in_order_and_resumes(tmp_path, monkeypatch, engine):
+    from ruling.questions import SystemOneRequest
+
+    rows = [
+        {"id": "r1", "state": "Two charges for one order, please refund one.",
+         "questions": {"team": {"type": "choice", "instructions": "Which team?",
+                                "criteria": {"billing": None, "technical": None, "sales": None}}},
+         "labels": {"team": "sales"}},
+        {"state": "The login page returns a 500 error since the deploy.",
+         "question": {"type": "noul", "instructions": "This is a technical problem."}},
+        {"id": "r3", "state": "word " * 20000,
+         "questions": {"long": {"type": "noul", "instructions": "It mentions a word."}}},
+    ]
+    dataset, output = tmp_path / "rows.jsonl", tmp_path / "answers.jsonl"
+    dataset.write_text("".join(json.dumps(r) + "\n" for r in rows))
+    monkeypatch.setenv("RULING_MODEL", engine.model_id)
+    monkeypatch.setenv("RULING_MAX_INPUT_TOKENS", str(engine.max_input_tokens))
+    command = ["predict", str(dataset), "--output", str(output), "--rotations", str(engine.rotations)]
+    main(command)
+    first = [json.loads(line) for line in output.read_text().splitlines()]
+
+    expected = [engine.evaluate(SystemOneRequest(state=r.state, questions=r.questions)).answers
+                for r in load_dataset(dataset)[:2]]
+    assert [line.get("id") for line in first] == ["r1", None, "r3"]
+    assert first[0]["answers"]["team"]["choice"] == expected[0]["team"].choice
+    assert first[1]["answers"]["decision"]["noul"] == pytest.approx(expected[1]["decision"].noul, abs=1e-3)
+    assert first[2]["error"]["code"] == "context_too_long"
+
+    output.write_text("".join(json.dumps(line) + "\n" for line in first[:1]))
+    main(command)
+    assert [json.loads(line) for line in output.read_text().splitlines()] == first

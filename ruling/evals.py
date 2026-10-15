@@ -21,6 +21,7 @@ from __future__ import annotations
 import json
 import time
 from collections import defaultdict
+from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -39,7 +40,18 @@ from ruling.calibration import (
 )
 from ruling.engine import InputTooLong
 from ruling.metrics import decision_metrics
-from ruling.questions import MAX_CHOICE_OPTIONS, Choice, Noul, Question, Score, State, check_askable, option_keys
+from ruling.questions import (
+    MAX_CHOICE_OPTIONS,
+    Choice,
+    InvalidOptions,
+    Noul,
+    Question,
+    Score,
+    State,
+    SystemOneRequest,
+    check_askable,
+    option_keys,
+)
 
 Distribution = dict[str, float]
 Label = str | int | bool | float | list[float] | dict[str, float]
@@ -416,6 +428,24 @@ def write_predictions(observations: list[Observation], calibration: Calibration,
             probs = softmax(obs.logits, calibration.temperature(obs.question_type))
             out.write(json.dumps({"record": obs.record, "question_id": obs.question_id, "type": obs.question_type,
                                   "keys": obs.keys, "probabilities": [float(p) for p in probs], "label": obs.label}) + "\n")
+
+
+def predict(engine, records: list[Record]) -> Iterator[dict]:
+    """One line per record, in order: its answers as the API returns them, or the API's error for a row it refuses.
+
+    Labels are ignored. A refused row keeps its place, so line i always belongs to record i.
+    """
+    for record in records:
+        line = {"id": record.id} if record.id is not None else {}
+        try:
+            check_askable(record.questions, engine.max_options)
+            response = engine.evaluate(SystemOneRequest(state=record.state, questions=record.questions))
+            line["answers"] = {qid: a.model_dump(mode="json") for qid, a in response.answers.items()}
+        except InputTooLong as exc:
+            line["error"] = {"code": "context_too_long", "message": str(exc)}
+        except InvalidOptions as exc:
+            line["error"] = {"code": "invalid_options", "message": str(exc)}
+        yield line
 
 
 def write_json(path: Path, data: dict) -> None:

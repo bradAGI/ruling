@@ -53,7 +53,7 @@ on an ordered scale, **noul** judges whether a statement is true, or which of
 two descriptions fits. Ask up to 64 in one request; the state is read once.
 
 There is a playground at `http://127.0.0.1:8010/`, a one-shot CLI (`uv run
-ruling ask --help`), a Python client (`from ruling import RulingClient`), a
+ruling ask --help`), a bulk one for files of rows (`ruling predict`), a Python client (`from ruling import RulingClient`), a
 zero-dependency TypeScript client in [`sdks/typescript`](sdks/typescript), and
 TypeSafe's own official SDK works against it unchanged — point
 `TYPESAFE_BASE_URL` at the server. Details for all of them are in
