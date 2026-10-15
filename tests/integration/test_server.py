@@ -177,6 +177,16 @@ def test_a_logged_decision_takes_its_outcome_and_exports_as_training_data(engine
     assert record.state == PAYLOAD["state"] and record.labels == {"refund": True}
 
 
+def test_a_decision_kept_out_of_training_is_answered_but_not_logged(engine, tmp_path):
+    # Endor's clients send this field to keep benchmark and evaluation traffic out of training.
+    app = create_app(Registry.single(engine), None, 4, DecisionLedger(tmp_path / "ledger.sqlite"))
+    with TestClient(app) as client:
+        excluded = client.post("/v1/systemone", json={**PAYLOAD, "exclude_from_training": True}).json()
+        logged = client.post("/v1/systemone", json=PAYLOAD).json()
+    assert excluded["answers"] and "id" not in excluded
+    assert logged["id"]
+
+
 def test_without_a_ledger_the_wire_format_is_unchanged(app):
     # Clients built on the hosted SDK decode these bodies; nothing may appear that the hosted API does not send.
     with TestClient(app) as client:

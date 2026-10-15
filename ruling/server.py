@@ -135,7 +135,7 @@ def create_app(registry: Registry, api_key: str | None, max_pending: int,
         # failover changes to say which side answered.
         if name != registry.default:
             response = response.model_copy(update={"model": name})
-        if ledger is not None:
+        if ledger is not None and not request.exclude_from_training:
             response = response.model_copy(update={"id": await run_in_threadpool(ledger.record, request, response)})
         return response
 

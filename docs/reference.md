@@ -223,6 +223,10 @@ decision with an outcome as a training record, unlabeled questions left
 unlabeled, ready for `ruling train --data RECORDS`. Off by default: the ledger
 holds your states verbatim.
 
+A request with `"exclude_from_training": true`, the field Endor's clients send
+for benchmark and evaluation traffic, is answered as usual but never logged,
+and its response has no `id`.
+
 ## API
 
 `POST /v1/systemone`

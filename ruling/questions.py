@@ -122,6 +122,8 @@ class SystemOneRequest(BaseModel):
     model: str | None = None
     state: State
     questions: dict[str, Question] = Field(min_length=1, max_length=MAX_QUESTIONS)
+    # Endor's name for traffic that must never become training data, such as benchmarks and evaluations.
+    exclude_from_training: bool = False
 
     @model_validator(mode="after")
     def ids_are_non_empty(self) -> "SystemOneRequest":
