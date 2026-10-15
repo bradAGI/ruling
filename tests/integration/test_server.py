@@ -110,6 +110,19 @@ def test_python_sdk_against_live_server(live_server):
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
+def test_python_sdk_authenticates_with_the_servers_key(live_server_with_key, monkeypatch):
+    question = {"refund": Noul(instructions="The customer asks for a refund.")}
+    with RulingClient(base_url=live_server_with_key, api_key="s3cret") as client:
+        assert client.system_one(state=PAYLOAD["state"], questions=question).answers["refund"].noul > 0.5
+    monkeypatch.setenv("RULING_API_KEY", "s3cret")
+    with RulingClient(base_url=live_server_with_key) as client:
+        assert client.models()
+    monkeypatch.delenv("RULING_API_KEY")
+    with RulingClient(base_url=live_server_with_key) as client, pytest.raises(httpx.HTTPStatusError) as refused:
+        client.models()
+    assert refused.value.response.status_code == 401
+
+
 def test_typescript_sdk_against_live_server(live_server):
     script = f"""
 import {{ RulingClient, choice, noul }} from {json.dumps(TS_SDK.as_uri())};
@@ -161,6 +174,8 @@ def test_a_logged_decision_takes_its_outcome_and_exports_as_training_data(engine
             decision = client.system_one(state=PAYLOAD["state"],
                                          questions={"refund": Noul(instructions="The customer asks for a refund.")}).id
             assert client.outcome(decision, {"refund": True}) == {"refund": True}
+            assert client.system_one(state="A benchmark row.", questions={"refund": Noul(instructions="A refund.")},
+                                     exclude_from_training=True).id is None
             with pytest.raises(httpx.HTTPStatusError) as wrong:
                 client.outcome(decision, {"refund": "maybe"})
             assert wrong.value.response.json()["error"]["code"] == "invalid_input"

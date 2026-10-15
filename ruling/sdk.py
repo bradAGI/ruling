@@ -12,15 +12,22 @@ DEFAULT_BASE_URL = "http://127.0.0.1:8010"
 
 
 class RulingClient:
-    def __init__(self, base_url: str | None = None, timeout: float = 60.0):
+    def __init__(self, base_url: str | None = None, api_key: str | None = None, timeout: float = 60.0):
         self.base_url = base_url or os.environ.get("RULING_BASE_URL", DEFAULT_BASE_URL)
-        self._http = httpx.Client(base_url=self.base_url, timeout=timeout)
+        # The server's own RULING_API_KEY, so one environment configures both ends.
+        api_key = api_key or os.environ.get("RULING_API_KEY")
+        headers = {"authorization": f"Bearer {api_key}"} if api_key else {}
+        self._http = httpx.Client(base_url=self.base_url, headers=headers, timeout=timeout)
 
     def system_one(
-        self, state: State, questions: dict[str, Choice | Score | Noul], model: str | None = None
+        self, state: State, questions: dict[str, Choice | Score | Noul], model: str | None = None,
+        exclude_from_training: bool = False,
     ) -> SystemOneResponse:
-        request = SystemOneRequest(model=model, state=state, questions=questions)
-        response = self._http.post("/v1/systemone", json=request.model_dump())
+        request = SystemOneRequest(model=model, state=state, questions=questions,
+                                   exclude_from_training=exclude_from_training)
+        # The flag goes only when set, as Endor's client sends it, so every other body is exactly System One's.
+        body = request.model_dump(exclude=None if exclude_from_training else {"exclude_from_training"})
+        response = self._http.post("/v1/systemone", json=body)
         response.raise_for_status()
         return SystemOneResponse.model_validate(response.json())
 
