@@ -12,332 +12,43 @@ cannot invent an answer you did not list.
 
 *On the 256 public judgments that carry Jev's own answers, a 19 GB open model
 with no training gets 231 right to Jev's 238 — not a significant difference
-(exact McNemar, p = 0.21). [Where Jev is ahead](#where-jev-leads) is below.*
+(exact McNemar, p = 0.21). [Where Jev is ahead](docs/results.md#where-jev-leads).*
 
-## Try it in two minutes
+## Documentation
+
+| Page | What's in it |
+|---|---|
+| [Getting started](docs/getting-started.md) | Install, the first request, the playground and clients, asking about images |
+| [Choosing models](docs/models.md) | The primary model, serving several from one process, escalating doubtful questions to a secondary |
+| [Fine-tuning](docs/fine-tuning.md) | Training an adapter on your own decisions, and retraining from production outcomes |
+| [Results](docs/results.md) | Accuracy and coverage against Jev and the open decision models, and where Jev leads |
+| [How it works](docs/how-it-works.md) | One prefix, many suffixes; reading logits instead of sampling; confidence |
+| [Reference](docs/reference.md) | Every setting, model prefix, API route, error code and client |
+| [Measurements](docs/measurements.md) | The full record, with the command behind every number |
+| [Adapter card](docs/adapter.md) | The adapter we trained, its data and how to reproduce it |
+| [Background](docs/background.md) | What Jev is, the other open recreations, related work |
+| [Development](docs/development.md) | Repository layout and running the tests |
+
+## Installation
 
 You need an Apple Silicon Mac, Python 3.12+, and [uv](https://docs.astral.sh/uv/).
+On NVIDIA, see [vLLM](docs/reference.md#on-nvidia-vllm).
 
 ```bash
-uv sync
-uv run ruling serve          # downloads a 2.3 GB model on first start, then serves http://127.0.0.1:8010
+git clone https://github.com/bradAGI/ruling && cd ruling
+uv sync                       # add --extra vision to ask about images
+uv run ruling serve           # downloads a 2.3 GB model on first start, then serves http://127.0.0.1:8010
 ```
 
 ```bash
 curl -s localhost:8010/v1/systemone -H 'content-type: application/json' -d '{
   "state": {"message": "My card was charged twice for one order. Refund the duplicate."},
-  "questions": {
-    "team":    {"type": "choice", "instructions": "Which team should handle this?",
-                "criteria": {"billing": "Charges and refunds", "technical": "Bugs", "sales": "Pricing"}},
-    "urgency": {"type": "score",  "instructions": "How urgent is this?",
-                "criteria": ["Can wait", "This week", "Today"]},
-    "refund":  {"type": "noul",   "instructions": "The customer asks for a refund."}
-  }}'
+  "questions": {"team": {"type": "choice", "instructions": "Which team should handle this?",
+                         "criteria": {"billing": null, "technical": null, "sales": null}}}}'
 ```
 
-```json
-{
-  "model": "mlx-community/Qwen3.5-4B-4bit",
-  "answers": {
-    "team":    {"type": "choice", "choice": "billing",
-                "probabilities": {"billing": 0.997, "technical": 0.002, "sales": 0.001}, "confidence": 0.995},
-    "urgency": {"type": "score", "score": 1.74, "legend": {"0": "Can wait", "1": "This week", "2": "Today"},
-                "probabilities": {"0": 0.066, "1": 0.131, "2": 0.803}, "confidence": 0.606},
-    "refund":  {"type": "noul", "noul": 0.955}
-  },
-  "usage": {"input_tokens": 405, "output_tokens": 0}
-}
-```
-
-Three question types: **choice** picks one option, **score** places the state
-on an ordered scale, **noul** judges whether a statement is true, or which of
-two descriptions fits. Ask up to 64 in one request; the state is read once.
-
-There is a playground at `http://127.0.0.1:8010/`, a one-shot CLI (`uv run
-ruling ask --help`), a bulk one for files of rows (`ruling predict`), a Python client (`from ruling import RulingClient`), a
-zero-dependency TypeScript client in [`sdks/typescript`](sdks/typescript), and
-TypeSafe's own official SDK works against it unchanged — point
-`TYPESAFE_BASE_URL` at the server. Details for all of them are in
-[docs/reference.md](docs/reference.md).
-
-![The playground: a state, three questions, a model picker, and each answer's probabilities as bars](assets/playground.png)
-
-The playground's model picker lists every name the server answers to; [serve
-several models](#serve-several-models-from-one-process) to compare them on the
-same state.
-
-### Ask about images
-
-The default Qwen3.5 models can see. Serve one as a `vision:` model and put
-images anywhere in the state as `{"type": "image", "media_type", "data"}`
-objects; questions refer to them as `<image 1>`, `<image 2>`, … in order:
-
-```bash
-uv sync --extra vision
-RULING_MODEL=vision:mlx-community/Qwen3.5-4B-4bit uv run ruling serve
-```
-
-```bash
-curl -s localhost:8010/v1/systemone -H 'content-type: application/json' -d '{
-  "state": {"note": "Customer says the parcel arrived crushed.",
-            "photo": {"type": "image", "media_type": "image/jpeg", "data": "'"$(base64 < parcel.jpg)"'"}},
-  "questions": {"damaged": {"type": "noul", "instructions": "<image 1> shows a damaged parcel."}}}'
-```
-
-The state and its images are read once, however many questions you ask:
-eight 12-megapixel photos and nine questions took 10 s and 7.2 GB on the 4B
-model. Up to 8 images of 5 MB each, PNG, JPEG or WebP. Any vision model behind
-an OpenAI-compatible server reads them too, through `openai:`; see
-[docs/reference.md](docs/reference.md#api).
-
-## Pick the primary model
-
-`RULING_MODEL` is the **primary** model: it answers every question. It is the
-only model you need. A **secondary** model is optional — it answers just the
-questions the primary is unsure about, and is set separately with
-`RULING_CASCADE_TO` (next section).
-
-| you want as primary | set | notes |
-|---|---|---|
-| the default | nothing | `mlx-community/Qwen3.5-4B-4bit`, 2.3 GB, 3 questions in ~136 ms |
-| the default, reading images too | `RULING_MODEL=vision:mlx-community/Qwen3.5-4B-4bit` | the same weights with their vision tower; needs `uv sync --extra vision` |
-| Jev-level accuracy | `RULING_MODEL=mlx-community/Qwen3.6-35B-A3B-4bit` | 19 GB, ~204 ms, the model in the chart above |
-| any other MLX checkpoint | `RULING_MODEL=<hub id or local path>` | tested with Qwen, Llama 3.2, Gemma 3 |
-| a model you serve elsewhere | `RULING_MODEL=openai:<name>` + `RULING_OPENAI_BASE_URL` | vLLM, llama.cpp, `mlx_lm.server`, or a commercial API; needs `top_logprobs` |
-| a model on OpenRouter | `RULING_MODEL=openrouter:<name>` | with a spend budget |
-| a model or LoRA adapter on an NVIDIA box | `RULING_MODEL=vllm:<name>` + `RULING_VLLM_BASE_URL` | vLLM's own decision endpoint, batched on the GPU; export an adapter trained here with `ruling export-adapter` |
-| Cloudflare's Clef-flash, locally | `RULING_MODEL=typesafe:clef-flash` + `TYPESAFE_BASE_URL=http://127.0.0.1:8000` | a trained 9B decision model; run the [MLX port](https://huggingface.co/mlx-community/clef-flash-4bit) with `python clef_mlx.py serve` and point ruling at it. 6.2 GB, the best-calibrated model we have measured |
-| the most accurate open decision model we have measured | `RULING_MODEL=typesafe:pplx-decider-v1.1-27b` + `TYPESAFE_BASE_URL=http://127.0.0.1:8092` | Perplexity's pplx-decider, 206 of JevBench's 231 public items; start its MLX port with `assets/bench/serve.sh pplx 8092`. 15.3 GB, prompts up to 8,192 tokens |
-| Jev itself, or any System One server | `RULING_MODEL=typesafe:<alias>` + `TYPESAFE_API_KEY` | `typesafe:jev-latest`; the host's own probabilities pass straight through. Mostly useful as the secondary, below |
-
-Any of these can also be the secondary. The other settings — token limits, API
-key, calibration, logprob caps — are in [docs/reference.md](docs/reference.md#install-and-run).
-
-### Serve several models from one process
-
-One process can also serve several models by name — a plain base, a tuned
-adapter per decision, a large model for escalation — and adapters on the same
-base share one copy of its weights. Put them in a JSON file and set
-`RULING_MODELS`; requests pick one with `model`, and `GET /v1/models` lists
-them:
-
-```bash
-cat > models.json <<'EOF'
-{"small": {"model": "mlx-community/Qwen3.5-0.8B-4bit"},
- "large": {"model": "mlx-community/Qwen3-4B-Instruct-2507-4bit"}}
-EOF
-RULING_MODELS=models.json uv run ruling serve
-```
-
-An entry can also name a decision server running elsewhere with `base_url`,
-so pplx-decider, Clef-flash and your own tuned model can answer side by side
-under one API. Details in [docs/reference.md](docs/reference.md#serve-several-models).
-
-## Make it yours: fine-tune on your own decisions
-
-The probabilities a stock model gives are usually right but often
-overconfident. A short LoRA fine-tune on a few hundred of your own labeled
-decisions fixes that, and it is the step that makes a confidence threshold
-safe to act on. Four commands.
-
-**1. Write your decisions as JSONL**, one record per line, in the same shape
-as a request plus the right answers:
-
-```json
-{"state": "Order 4471 arrived damaged, customer wants a replacement.",
- "questions": {"team": {"type": "choice", "instructions": "Which team?",
-                        "criteria": {"returns": null, "billing": null, "shipping": null}},
-               "urgent": {"type": "noul", "instructions": "This needs a reply today."}},
- "labels": {"team": "returns", "urgent": false}}
-```
-
-Choice labels are the option key, score labels the level index, noul labels
-`true`/`false`. Keep a separate file of records you will never train on.
-
-**2. Train.** The trainer refuses to start if any training state also appears
-in a holdout file, so leakage cannot happen by accident.
-
-```bash
-uv run ruling train --data my-decisions.jsonl --holdout my-holdout.jsonl \
-  --model mlx-community/Qwen3-4B-Instruct-2507-4bit --output runs/adapters/mine
-```
-
-About 40 minutes for 25,000 records on a Mac; a few hundred records take
-minutes. Use a pure-attention base like `Qwen3-4B-Instruct-2507`; Qwen3.5's
-hybrid attention trains 15 to 30 times slower in MLX.
-
-**3. Check it on the holdout, then fit a temperature on it.**
-
-```bash
-uv run ruling eval my-holdout.jsonl --model mlx-community/Qwen3-4B-Instruct-2507-4bit --adapter runs/adapters/mine
-uv run ruling calibrate my-holdout.jsonl --model mlx-community/Qwen3-4B-Instruct-2507-4bit --adapter runs/adapters/mine --output calibration.json
-```
-
-`eval` prints accuracy, calibration error, and **coverage at a 5% error
-budget**: the share of decisions you can automate, accepting in confidence
-order, before the accepted set exceeds 5% errors. That number is your
-threshold's safety margin. The calibration file is bound to the exact model
-and adapter it was fit on and will not load against anything else.
-
-**4. Serve with both.**
-
-```bash
-RULING_MODEL=mlx-community/Qwen3-4B-Instruct-2507-4bit RULING_ADAPTER=runs/adapters/mine \
-RULING_CALIBRATION=calibration.json uv run ruling serve
-```
-
-What to expect, from our own adapter on 27,000 constructed records, tested on
-four sets it never saw: accuracy moved by a question or two, calibration error
-roughly halved, and confident errors (wrong while reporting p ≥ 0.9) fell
-three- to thirteen-fold. Full card and reproduction in
-[docs/adapter.md](docs/adapter.md).
-
-**Then keep learning from production.** Set `RULING_LEDGER=ledger.sqlite` and
-the server records every decision and returns its `id` (a request can opt out
-with `exclude_from_training`); post what turned out to be right to
-`/v1/decisions/<id>/outcome`. Then run, on a schedule:
-
-```bash
-uv run ruling retrain --ledger ledger.sqlite --adapters runs/adapters/tickets --holdout my-holdout.jsonl
-RULING_ADAPTER=runs/adapters/tickets/current uv run ruling serve
-```
-
-Each run trains a new version on the resolved decisions, starting from the one
-being served, and promotes it to `current` only if it beats that one on your
-holdout: lower log loss, no lost accuracy. See
-[Learn from your own traffic](docs/reference.md#learn-from-your-own-traffic).
-
-## Escalate the doubtful questions to a secondary model
-
-Once the primary model's confidence is honest, one threshold lets a bigger
-model answer only what the primary is unsure about.
-
-| role | set with | answers | example |
-|---|---|---|---|
-| **primary** | `RULING_MODEL` (+ `RULING_ADAPTER`) | every question | the 4B with your adapter, always loaded |
-| **secondary** | `RULING_CASCADE_TO` | only questions whose top probability is under `RULING_CASCADE_THRESHOLD` | the local 35B, an `openai:` endpoint, or `typesafe:jev-latest` |
-
-```bash
-RULING_MODEL=mlx-community/Qwen3-4B-Instruct-2507-4bit RULING_ADAPTER=runs/adapters/mine \
-RULING_CASCADE_TO=mlx-community/Qwen3.6-35B-A3B-4bit RULING_CASCADE_THRESHOLD=0.84 \
-uv run ruling serve
-```
-
-Measured with the threshold fitted on one dataset and applied to the other:
-the secondary answered 13% of questions and the pair matched the secondary
-alone (90 vs 91 on TypeSafe's rows, 145 vs 144 on Every's). Set the secondary
-to `typesafe:jev-latest` and the same arithmetic applies to your Jev bill.
-
-Both directions survive an outage. If the secondary is a host that returns
-503 or times out, the primary's answers stand for the questions it would have
-escalated. For the reverse, Jev first and a local model only when Jev is down,
-set `RULING_MODEL=typesafe:jev-latest` and `RULING_FAILOVER_TO=<local model>`;
-the response's `model` says which one answered.
-
-## How good is it
-
-One Mac, the same four held-out sets for every model. Our models at the
-default three option orderings; Clef-flash is Cloudflare's trained 9B
-decision model, run locally through its MLX port and scored by the same
-harness, and the three rows below it are other open decision models from the
-Hub (Perplexity's pplx-decider through its MLX port, Mapika's decider through
-its own package), each run through its publisher's own inference code and
-scored the same way. The [full record](docs/measurements.md) has every
-setting and the commands for each cell.
-
-| model | TypeSafe 102 | authored144 | perturbations108 | Every 154 |
-|---|---:|---:|---:|---:|
-| Qwen3.5-4B, the default | 0.814 | 0.917 | 0.907 | 0.929 |
-| Qwen3-4B-Instruct + our adapter | 0.843 | 0.889 | 0.861 | 0.916 |
-| Qwen3.6-35B-A3B | 0.873 | 0.958 | 0.954 | 0.922 |
-| Clef-flash 9B, 4-bit MLX port | **0.892** | 0.903 | 0.954 | 0.955 |
-| pplx-decider-v1.1-27b, 4-bit MLX port | 0.899 on 89 rows | **0.965** | **1.000** | 0.955 |
-| decider-4b v2.1 | 0.814 | 0.910 | 0.880 | 0.942 |
-| decider-2b v11 | 0.755 | 0.868 | 0.917 | 0.935 |
-| Jev, published | 0.882 | — | — | **0.961** |
-
-pplx-decider rejects any prompt over its 8,192-token input limit, as its
-publisher's code does, so on TypeSafe's rows it is scored on the 89 it can
-read (13 are longer); on those 89 it gets 80 right, and Clef-flash's 0.892
-on all 102 stays the best full-set number. Mapika's two models run through
-their own package on Apple Silicon in float16, its default there.
-
-On [JevBench](https://github.com/fstandhartinger/jevbench)'s 231 public
-decisions, run through the harness's own adapter: ruling with the 35B 0.857,
-Jev 0.866, and the two identical on the 111 hard items. Clef-flash gets
-0.792, and 0.604 on the hard items, where a 9B model's reasoning runs out;
-pplx-decider 0.892, with 0.775 on the hard items, the best of any row;
-decider-4b 0.831 and decider-2b 0.758. Full table in
-[docs/measurements.md](docs/measurements.md#jevbench-the-public-items).
-
-Coverage at a 5% error budget, the number a threshold depends on:
-
-| | TypeSafe 102 | Every 154 | authored144 | perturbations108 |
-|---|---:|---:|---:|---:|
-| Qwen3.5-4B | 0.608 | 0.818 | 0.924 | 0.907 |
-| Qwen3-4B-Instruct + our adapter | 0.392 | 0.948 | 0.882 | 0.815 |
-| Qwen3.6-35B-A3B | 0.716 | 0.948 | **1.000** | **1.000** |
-| Clef-flash 9B, 4-bit MLX port | **0.843** | **1.000** | 0.764 | **1.000** |
-| pplx-decider-v1.1-27b, 4-bit MLX port | 0.854 on 89 rows | **1.000** | **1.000** | **1.000** |
-| decider-4b v2.1 | 0.588 | 0.987 | 0.896 | 0.815 |
-| decider-2b v11 | 0.294 | 0.935 | 0.715 | 0.787 |
-| Jev, published | 0.784 | **1.000** | — | — |
-
-Pooled over the 256 judgments that carry Jev's own answers, Clef-flash and Jev
-are level on everything we measure: 238 correct each, coverage at 5% error
-0.961 each, and seven questions each that only one of them gets right
-(McNemar p = 1.00). Clef-flash does it with no order averaging, at 217 ms
-median per request on Every's rows on a laptop.
-
-**Which model to run.** For short judgments of the kind TypeSafe and Every
-publish — routing, triage, yes/no checks on a few hundred tokens — Clef-flash
-alone: it matches Jev and its confidence is the most trustworthy we have
-measured. For long policy texts and multi-step reasoning, the 35B: it gets 81
-of JevBench's 111 hard items to Clef-flash's 67. pplx-decider, at 15 GB, is
-ahead of both on every set here except TypeSafe's, where it cannot read the
-13 rows over 8,192 tokens; it gets 86 of the 111 hard items.
-
-## Where Jev leads
-
-The tie in the chart is real, and so is this. On the same rows Jev is ahead on:
-
-- **Every's 154 labeled judgments**, 148 to the 35B's 142 and Clef-flash's
-  147. The cleanest accuracy comparison we have, and Jev still wins it, by one
-  question over Clef-flash.
-- **Confidence ordering, against stock models.** Pooled over all 256
-  judgments, Jev's coverage at 5% error is 0.961 to the stock 35B's 0.863, and
-  it is confidently wrong 0.4% of the time to the 35B's 3.5%. Our adapter
-  narrows that without closing it; Clef-flash, trained for it, closes it.
-- **Probabilities, not just answers.** Jev's distributions sit closer to
-  TypeSafe's reference than ours even where the top answer agrees.
-- **Knowledge-heavy inputs.** Other replications ([Kev](https://github.com/jaredpalmer/kev),
-  [decider](https://github.com/Mapika/decider)) report Jev 10 to 18 points ahead
-  on MMLU-style items; we have not run that suite and expect the same.
-
-## How it works
-
-![Measured replay: ruling returns every typed answer at once while the same model streams JSON token by token](assets/replay.gif)
-
-The state is encoded once and its cache is kept. Every question becomes a
-short suffix listing its options as `A.`, `B.`, `C.`; all suffixes run in one
-batched forward pass against that cache. At each answer position the logits
-are restricted to the option letters and normalized — that is the answer.
-Nothing is decoded, so `output_tokens` is 0 and the answer is always one of
-your options.
-
-Each question is scored under three orderings of its options and the results
-averaged, which removes the letter bias small models have. Confidence uses the
-formulas from TypeSafe's MIT-licensed client, so it means the same thing as the
-hosted API's.
-
-![Prefill runs at 5,140 tokens per second and 41 TFLOP/s; decoding the same answer as JSON runs at 131 tokens per second and 1.0 TFLOP/s](assets/readout.png)
-
-*Why this is fast: reading stops after prefill, which keeps the GPU
-compute-bound. Generating the same answers as JSON decodes one token at a time
-and runs at about a fortieth of the throughput on the same chip.*
-
-The longer version, with two-stage Choice above 62 options, the rotation cap,
-and the confidence formulas, is in [docs/reference.md](docs/reference.md#how-it-works).
+Open `http://127.0.0.1:8010/` for the playground. The rest is in
+[Getting started](docs/getting-started.md).
 
 ## Limits
 
@@ -356,44 +67,6 @@ and the confidence formulas, is in [docs/reference.md](docs/reference.md#how-it-
   ruling serves through `vllm:` (vLLM's own decision endpoint) or `openai:`
   against a stock vLLM or llama.cpp; see
   [docs/reference.md](docs/reference.md#on-nvidia-vllm).
-
-## Layout
-
-```
-ruling/            the package: engine.py (MLX scoring), vision.py (images, through mlx-vlm),
-                   hosted.py (OpenAI-compatible endpoints), cascade.py, calibration.py, evals.py,
-                   train.py, retrain.py, ledger.py, registry.py, server.py, cli.py, sdk.py
-sdks/typescript/   zero-dependency JS client with TypeScript types
-datasets/          labeled JSONL fixtures and the record format
-docs/              reference.md (settings, API, clients), measurements.md (the full record),
-                   background.md (what Jev is, the other recreations), adapter.md (the model card)
-assets/            figures and the scripts that redraw them from local evaluation runs (runs/, not committed)
-tests/             unit (no model) and integration (real model, downloads Qwen3.5-0.8B on first run)
-```
-
-```bash
-uv run pytest tests/unit
-uv run pytest tests/integration                 # CI runs this with -m "not heavy": the training, PEFT and encoder modules need a GPU
-```
-
-## Related work
-
-- Cloudflare's [Clef and Clef-flash](https://blog.cloudflare.com/clef-decision-models/)
-  (Apache-2.0): decision models with a trained head over frozen Qwen
-  backbones. The numbers above use the community
-  [MLX port](https://huggingface.co/mlx-community/clef-flash-4bit) of
-  Clef-flash, unmodified, served by its own `clef_mlx.py` and reached through
-  ruling's `typesafe:` engine.
-
-- [Kev](https://github.com/jaredpalmer/kev), [SemIf](https://github.com/TheoLeeCJ/SemIf),
-  [decider](https://github.com/Mapika/decider), [snellingio/system-one](https://github.com/snellingio/system-one):
-  the other open recreations. How they compare is in [docs/background.md](docs/background.md).
-- Archer Hume, [Jev's Architecture Unmasked](https://archerhume.com/posts/jevs-architecture-unmasked/):
-  the black-box analysis the architecture notes lean on.
-- Zhao et al., *Calibrate Before Use* (2021); Guo et al., *On Calibration of
-  Modern Neural Networks* (2017); Gneiting and Raftery, *Strictly Proper Scoring
-  Rules* (2007): the methods behind the prior debiasing, the temperature scaling,
-  and the choice of loss.
 
 ## License
 
