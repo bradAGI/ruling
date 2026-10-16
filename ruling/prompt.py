@@ -98,29 +98,27 @@ def render_question(question: Choice | Score | Noul, codes: list[str], rotation:
 
 
 def hosted_user_message(state: State, rendered: RenderedQuestion) -> str | list[dict]:
-    """The user turn for an OpenAI-compatible host: question and options first,
-    the state after them, the answer cue last.
+    """The user turn for an OpenAI-compatible host: the state, then the question,
+    its options and the answer cue, the layout the local engine scores.
 
-    Such a host caches the prompt prefix it has already processed and reuses
-    it for the next request that starts the same way. Across calls the
-    question and its options repeat and the state changes, so with the state
-    first nothing after it is reused and every call pays for the whole prompt:
-    on a CPU host at 36 tokens a second, 18 s against 1 s. The local engine
-    keeps the state first, since it encodes the state once and scores every
-    question against it.
+    The model answers differently when the question comes first: with the same
+    4-bit weights behind mlx_lm.server, that layout got 115 of authored144's
+    144 against 126 for this one. A host that caches prompt prefixes still
+    reuses the state across a request's questions and orderings, which is
+    the repeat a decision server sees.
 
-    A state with images becomes content parts, each image after the state text.
+    A state with images becomes content parts, each image after the state text
+    and before the question, as the local vision engine lays them out.
     """
-    text = f"{rendered.question}\n{rendered.options}\n\n{render_state(state)}"
     images = state_images(state)
     if not images:
-        return text + rendered.closing
+        return render_state(state) + rendered.text
     # Each image follows the state under the reference the state text uses for it.
-    parts = [{"type": "text", "text": text}]
+    parts = [{"type": "text", "text": render_state(state)}]
     for number, image in enumerate(images, 1):
         parts += [{"type": "text", "text": f"{IMAGE_REFERENCE.format(number)}:"},
                   {"type": "image_url", "image_url": {"url": image.data_url()}}]
-    return parts + [{"type": "text", "text": "\n\n" + rendered.closing}]
+    return parts + [{"type": "text", "text": "\n\n" + rendered.text}]
 
 
 def prior_question(cardinality: int) -> Choice:

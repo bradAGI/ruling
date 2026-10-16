@@ -219,29 +219,35 @@ Zero-shot, from a 4-bit 4B model, 0.53 with an ECE under 0.1 is usable.
 
 
 
-### Hosted prompt layout: question before the state
+### Tried and reverted: the question before the state on hosted models
 
-For `openai:` and `openrouter:` hosts the user turn now puts the question and
-its options before the state, so a host that caches prompt prefixes can reuse
-the part that repeats. Measured on a CPU host at 36 tokens a second, that cut
-a call over a new state from 18 s to 1 s. The local MLX engine's layout is
-unchanged.
+For `openai:` and `openrouter:` hosts the user turn briefly put the question
+and its options before the state, so a host that caches prompt prefixes could
+reuse the part that repeats across calls over different states. On a CPU
+host at 36 tokens a second that cut a call over a new state from 18 s to 1 s,
+and on Every's rows, one ordering, it looked free: 141 of 154 before, 140
+after. It was not free. The same 4-bit weights, `Qwen3-4B-Instruct-2507`,
+behind `mlx_lm.server`, scored on authored144 at three orderings in both
+layouts, next to the local engine on the same weights and the bf16 checkpoint:
 
-Whether the model answers differently in that layout, checked with the
-default 4B behind `mlx_lm.server` on Every's rows, one ordering, one
-connection:
+| run | correct / 144 | mean top probability | agrees with the local engine |
+|---|---:|---:|---:|
+| local MLX engine, 4-bit | 126 | 0.983 | |
+| hosted, state first | 126 | 0.983 | 144 of 144, probabilities within 0.002 |
+| hosted, question first | 115 | 0.940 | 116 of 144 |
+| local MLX engine, bf16 | 130 | 0.990 | 139 of 144 |
 
-| layout | labeled accuracy | ECE | coverage at 5% error | top answer changed |
-|---|---:|---:|---:|---:|
-| state first (before) | 141 / 154 | 0.057 | 0.779 | |
-| question first (after) | 140 / 154 | 0.060 | 0.695 | 129 of 758 questions |
-
-Accuracy is unchanged (McNemar p = 1.00, two questions each way). The
-distributions are not: the top answer moves on 17% of questions and the top
-probability by 0.118 on average, enough to change coverage on a set this
-small. A calibration fitted for a hosted model before this change does not
-describe it after, and the layout is not part of the calibration's
-provenance, so refit any hosted calibration rather than carrying it over.
+With the state first the hosted readout reproduces the local engine exactly;
+with the question first the model changes its top answer on 28 questions and
+gets 11 more of them wrong. The hosted layout is the local one again, and the
+prefix a host reuses is the state, across a request's questions and
+orderings. This also closed the gap first seen on Linux: vLLM 0.31.0 on an
+L4 serving the bf16 checkpoint scored 121 of 144 with the question first and
+129 with the state first, one question from the bf16 checkpoint through the
+MLX engine on a Mac and in agreement with it on 143 of 144; the remaining
+three or four questions against the 4-bit MLX build are quantization. Every
+answer letter was in the host's top 20 logprobs on every call, so the readout
+had nothing to do with it.
 
 ### Tried: calibration terms in the training objective
 

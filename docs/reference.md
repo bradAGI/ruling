@@ -179,11 +179,12 @@ RULING_MODEL=openai:Qwen/Qwen3-4B-Instruct-2507 RULING_OPENAI_BASE_URL=http://12
   RULING_OPENAI_EXTRA_BODY='{"chat_template_kwargs": {"enable_thinking": false}}' ruling serve
 ```
 
-Checked on 14 October 2026 on one NVIDIA L4 with vLLM 0.31.0: ruling's unit
+Checked on 16 October 2026 on one NVIDIA L4 with vLLM 0.31.0: ruling's unit
 tests pass on Linux, `ruling eval` scored authored144 at three orderings in
-35 s (121 of 144, against 126 for the same model at 4-bit on a Mac), a
-77-option choice was answered in two stages in 2.2 s, and three questions took
-150 ms at the median. vLLM 0.31.0 crashed there while capturing CUDA graphs;
+32 s (129 of 144, one question apart from the same bf16 checkpoint through the
+MLX engine on a Mac, which agrees with it on 143 of 144; the 4-bit MLX build
+gets 126), a 77-option choice was answered in two stages in 2.2 s, and three
+questions took 150 ms at the median. vLLM 0.31.0 crashed there while capturing CUDA graphs;
 `--enforce-eager` avoids it, at some cost in speed.
 
 ## Training

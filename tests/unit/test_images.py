@@ -67,7 +67,7 @@ def test_the_prompt_text_never_carries_image_bytes():
     assert "<image 1>" in render_state({"photo": photo})
 
 
-def test_a_hosted_message_attaches_each_image_after_the_state_and_is_unchanged_without_any():
+def test_a_hosted_message_puts_each_image_between_the_state_and_the_question():
     rendered = render_question(Noul(instructions="The picture is red."), ["A", "B"])
     assert isinstance(hosted_user_message("no pictures", rendered), str)
 
@@ -77,4 +77,5 @@ def test_a_hosted_message_attaches_each_image_after_the_state_and_is_unchanged_w
     assert urls == [f"data:image/png;base64,{first['data']}", f"data:image/png;base64,{second['data']}"]
     text = "".join(p["text"] for p in parts if p["type"] == "text")
     assert "<image 1>" in text and "<image 2>" in text and first["data"] not in text
-    assert parts[-1]["type"] == "text" and parts[-1]["text"].strip() == rendered.closing
+    assert parts[0]["text"] == render_state({"shots": [first, second]})
+    assert parts[-1]["type"] == "text" and parts[-1]["text"].strip() == rendered.text
