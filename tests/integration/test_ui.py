@@ -11,6 +11,7 @@ from ruling.calibration import Calibration
 from ruling.engine import Engine
 from ruling.registry import Registry
 from ruling.retrain import REPORT, promote
+from ruling.train import TRAINING
 from ruling.server import create_app
 from ruling.vision import VISION_PREFIX, VisionEngine
 from tests.integration.conftest import TEST_MODEL, _serve
@@ -113,6 +114,10 @@ def test_the_history_page_shows_every_finished_run_and_the_one_being_served(page
             "version": version.name, "started_from": None if number == 1 else "v1", "records": 40,
             "current": scores, "candidate": {**scores, "nll": 0.8 if promoted else 1.0}, "promoted": promoted,
             "reason": "held-out log loss fell" if promoted else "held-out log loss did not fall"}))
+    # v1 kept its training log; v2's is gone, as an imported adapter's would be.
+    curve = [{"step": 0, "loss": 1.4}] + [{"step": step, "loss": 1.4 - step / 100, "train_loss": 1.5 - step / 100,
+                                           "progress": step / 50, "eta_seconds": float(50 - step)} for step in (25, 50)]
+    (adapters / "v1" / TRAINING).write_text(json.dumps({"config": {}, "history": curve}))
     promote(adapters, adapters / "v1")
     tuned = Engine(TEST_MODEL, Calibration(), 8192, 1, False, adapters / "current")
     server, thread, url = _serve(create_app(Registry.single(tuned), None, 4))
@@ -123,6 +128,10 @@ def test_the_history_page_shows_every_finished_run_and_the_one_being_served(page
         assert [rows.nth(i).get_attribute("data-version") for i in range(rows.count())] == ["v2", "v1"]
         assert page.locator("tr.serving").get_attribute("data-version") == "v1"
         assert page.locator("tr.promoted").get_attribute("data-version") == "v1"
+        # The curve is drawn from the version's own training log: one point per logged step, none without a log.
+        points = page.locator('tr[data-version="v1"] svg polyline').get_attribute("points").split()
+        assert len(points) == len(curve)
+        assert page.locator('tr[data-version="v2"] svg').count() == 0
     finally:
         server.should_exit = True
         thread.join(timeout=10)

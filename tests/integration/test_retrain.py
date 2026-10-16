@@ -14,7 +14,7 @@ from ruling.cli import main
 from ruling.config import Settings
 from ruling.ledger import DecisionLedger
 from ruling.registry import Registry, build_engine
-from ruling.retrain import CALIBRATION, CURRENT, REPORT, should_promote
+from ruling.retrain import CALIBRATION, CURRENT, REPORT, history, should_promote
 from ruling.server import create_app
 
 from .conftest import TEST_MODEL
@@ -60,3 +60,5 @@ def test_served_outcomes_train_a_version_that_is_promoted_only_if_better(engine,
         serving = build_engine(replace(Settings.from_env(), model=TEST_MODEL, adapter_path=adapters / version,
                                        calibration_path=adapters / version / CALIBRATION))
         assert serving.calibration.temperatures == calibration.temperatures
+        # The history page reads each version's own training log, finished at the last step.
+        assert history(adapters)["versions"][run]["training"][-1]["progress"] == 1.0

@@ -85,6 +85,7 @@ class TrainConfig:
 
 
 CHECKPOINT = "checkpoint"
+TRAINING = "training.json"
 # Rendering happens in chunks of this many batches, which are then sorted by length and cut into batches.
 CHUNK_BATCHES = 64
 
@@ -179,6 +180,36 @@ def config_json(config: TrainConfig) -> dict:
 def config_mismatch(saved: dict, requested: dict) -> list[str]:
     """The fields a resumed run would change, other than `steps`, which may be raised to continue a finished run."""
     return sorted(k for k in set(saved) | set(requested) if k != "steps" and saved.get(k) != requested.get(k))
+
+
+def progress(step: int, steps: int, elapsed: float) -> dict:
+    """How far a run is and when it should end, rating the steps left at the run's pace so far.
+
+    `elapsed` covers every step since the run began, across resumes, so the pace is the whole run's."""
+    return {"elapsed_seconds": elapsed, "progress": step / steps, "eta_seconds": (steps - step) * elapsed / step}
+
+
+class WandbSink:
+    """Mirrors every history entry to a Weights & Biases run, opened on entering and finished on leaving,
+    marked failed when training raised. The package is imported here only, so it stays optional."""
+
+    def __init__(self, project: str | None, config: TrainConfig):
+        try:
+            import wandb
+        except ImportError as error:
+            raise ImportError("Weights & Biases logging needs the wandb package: pip install 'ruling[wandb]'") from error
+        self.wandb, self.project, self.config = wandb, project, config
+        self.run = None
+
+    def __enter__(self) -> "WandbSink":
+        self.run = self.wandb.init(project=self.project, config=config_json(self.config))
+        return self
+
+    def __call__(self, entry: dict) -> None:
+        self.run.log(entry, step=entry["step"])
+
+    def __exit__(self, kind, value, traceback) -> None:
+        self.run.finish(exit_code=0 if kind is None else 1)
 
 
 def save_checkpoint(directory: Path, weights: dict[str, mx.array], optimizer_state: dict, state: dict) -> None:
@@ -418,9 +449,10 @@ class Trainer:
         meta = {"config": {**config_json(self.config), "data": data},
                 "base_revision": self.engine.revision, "train_records": len(self.train_records),
                 "train_examples": len(self.train_examples), "valid_examples": len(self.valid_examples), "history": history}
-        (directory / "training.json").write_text(json.dumps(meta, indent=2) + "\n")
+        (directory / TRAINING).write_text(json.dumps(meta, indent=2) + "\n")
 
-    def run(self, log=print) -> list[dict]:
+    def run(self, log=print, sink=None) -> list[dict]:
+        """Train to `steps`, returning the history; `sink` receives each history entry as it is made."""
         config = self.config
         model = self.engine.model
         model.train()
@@ -434,10 +466,16 @@ class Trainer:
         trainable = sum(v.size for _, v in tree_flatten(model.trainable_parameters()))
         log(f"trainable parameters {trainable:,}; {len(self.train_examples):,} train and {len(self.valid_examples):,} validation examples")
 
+        def record(entry: dict) -> None:
+            history.append(entry)
+            log(json.dumps(entry))
+            if sink is not None:
+                sink(entry)
+
         batches = self._batches()
         if self.checkpoint is None:
-            history = [{"step": 0, **self.validate()}]
-            log(json.dumps(history[-1]))
+            history = []
+            record({"step": 0, **self.validate()})
             self.save(config.output, history)
             first, tokens_seen, elapsed = 1, 0, 0.0
         else:
@@ -464,17 +502,16 @@ class Trainer:
             if step % config.eval_every == 0 or step == config.steps:
                 elapsed = time.perf_counter() - started
                 entry = {"step": step, "train_loss": float(np.mean(window)), "tokens_per_second": tokens_seen / elapsed,
-                         **self.validate()}
+                         **progress(step, config.steps, elapsed), **self.validate()}
                 window = []
-                history.append(entry)
-                log(json.dumps(entry))
+                record(entry)
                 if entry["loss"] < best:
                     best = entry["loss"]
                     self.save(config.output, history)
                 else:
-                    meta = json.loads((config.output / "training.json").read_text())
+                    meta = json.loads((config.output / TRAINING).read_text())
                     meta["history"] = history
-                    (config.output / "training.json").write_text(json.dumps(meta, indent=2) + "\n")
+                    (config.output / TRAINING).write_text(json.dumps(meta, indent=2) + "\n")
                 save_checkpoint(config.output / CHECKPOINT, dict(tree_flatten(model.trainable_parameters())), optimizer.state,
                                 {"step": step, "tokens_seen": tokens_seen, "elapsed": elapsed, "stream": batches.state(),
                                  "history": history, "config": config_json(config)})

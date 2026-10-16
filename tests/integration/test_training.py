@@ -1,5 +1,6 @@
 import json
 import os
+import sys
 from pathlib import Path
 
 import mlx.core as mx
@@ -148,7 +149,8 @@ def test_resumed_run_matches_an_uninterrupted_one_bit_for_bit(small_data, test_m
 
     resumed = json.loads((tmp_path / "split" / "checkpoint" / "state.json").read_text())
     assert [entry["step"] for entry in resumed["history"]] == [0, 3, 6]
-    assert resumed["history"][-1] == expected[-1] | {"tokens_per_second": resumed["history"][-1]["tokens_per_second"]}
+    timing = {key: resumed["history"][-1][key] for key in ("tokens_per_second", "elapsed_seconds")}
+    assert resumed["history"][-1] == expected[-1] | timing
     uninterrupted = json.loads((tmp_path / "whole" / "checkpoint" / "state.json").read_text())
     assert resumed["tokens_seen"] == uninterrupted["tokens_seen"] and resumed["stream"] == uninterrupted["stream"]
     for name in ("adapters", "optimizer"):
@@ -169,3 +171,36 @@ def test_from_adapter_starts_where_the_source_adapter_stands(small_data, test_mo
     mismatched, _ = _small_run(test_model, small_data, tmp_path / "mismatched", lora_rank=4, from_adapter=tmp_path / "source")
     with pytest.raises(ValueError, match="not the requested"):
         Trainer(mismatched)
+
+
+@pytest.fixture(scope="module")
+def watched_run(small_data, test_model, tmp_path_factory):
+    """A short `ruling train --wandb` run with the package stood in for: the history it wrote and what reached the sink."""
+    from ruling.cli import main
+    from ruling.train import TRAINING
+    from tests.unit.test_train import FakeWandb
+
+    output = tmp_path_factory.mktemp("watched") / "adapter"
+    _, args = _small_run(test_model, small_data, output)
+    fake = FakeWandb()
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setitem(sys.modules, "wandb", fake)
+        main(args + ["--wandb", "curves"])
+    return json.loads((output / TRAINING).read_text())["history"], fake
+
+
+def test_every_progress_line_says_how_far_the_run_is_and_when_it_ends(watched_run):
+    history, _ = watched_run
+    assert history[0]["step"] == 0 and "progress" not in history[0]
+    stepped = history[1:]
+    assert [e["progress"] for e in stepped] == sorted(e["progress"] for e in stepped)
+    assert [e["elapsed_seconds"] for e in stepped] == sorted(e["elapsed_seconds"] for e in stepped)
+    assert all(e["elapsed_seconds"] > 0 and e["eta_seconds"] >= 0 for e in stepped)
+    assert stepped[-1]["progress"] == 1.0 and stepped[-1]["eta_seconds"] == 0.0
+
+
+def test_wandb_receives_every_history_entry_as_the_run_makes_it(watched_run):
+    history, fake = watched_run
+    assert fake.init_calls[0]["project"] == "curves" and fake.init_calls[0]["config"]["steps"] == 6
+    assert fake.logged == [(entry["step"], entry) for entry in history]
+    assert fake.finished == [0]

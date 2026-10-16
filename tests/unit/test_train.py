@@ -1,5 +1,6 @@
 import dataclasses
 import json
+import sys
 
 import numpy as np
 import pytest
@@ -149,3 +150,81 @@ def test_batch_stream_resumes_to_the_exact_next_batch():
     again.restore(state)
     assert [next(again) for _ in range(63)] == first[137:]
     assert again.state() == whole.state()
+
+
+def test_progress_runs_from_the_first_step_to_one_and_the_eta_to_zero():
+    from ruling.train import progress
+
+    steps, seconds_per_step = 10, 1.5
+    entries = [progress(step, steps, step * seconds_per_step) for step in range(1, steps + 1)]
+    assert [e["progress"] for e in entries] == sorted(e["progress"] for e in entries)
+    assert entries[-1]["progress"] == 1.0 and entries[-1]["eta_seconds"] == 0.0
+    for step, entry in enumerate(entries, start=1):
+        assert entry["elapsed_seconds"] == step * seconds_per_step
+        assert entry["eta_seconds"] == pytest.approx((steps - step) * seconds_per_step)
+
+
+def test_progress_after_a_resume_rates_the_whole_run_not_the_part_since_restart():
+    from ruling.train import progress
+
+    # Twelve seconds for six steps: the checkpoint's elapsed plus this process's, so two seconds a step.
+    assert progress(6, 10, 12.0)["eta_seconds"] == pytest.approx(8.0)
+
+
+class FakeWandb:
+    """A stand-in for the wandb module: records what a run was opened with, logged, and finished with."""
+
+    def __init__(self):
+        self.init_calls, self.logged, self.finished = [], [], []
+
+    def init(self, project, config):
+        self.init_calls.append({"project": project, "config": config})
+        return self
+
+    def log(self, data, step):
+        self.logged.append((step, data))
+
+    def finish(self, exit_code):
+        self.finished.append(exit_code)
+
+
+def _config(tmp_path):
+    from ruling.train import TrainConfig
+
+    return TrainConfig(model="m", data=[tmp_path / "a.jsonl"], output=tmp_path / "out", holdout=[], steps=4)
+
+
+def test_wandb_sink_opens_a_run_on_the_config_logs_every_entry_by_step_and_finishes(tmp_path, monkeypatch):
+    from ruling.train import WandbSink, config_json
+
+    fake = FakeWandb()
+    monkeypatch.setitem(sys.modules, "wandb", fake)
+    entries = [{"step": 0, "loss": 1.4}, {"step": 2, "loss": 1.1, "train_loss": 1.3, "progress": 0.5}]
+    with WandbSink("tickets", _config(tmp_path)) as sink:
+        assert fake.init_calls == [{"project": "tickets", "config": config_json(_config(tmp_path))}]
+        for entry in entries:
+            sink(entry)
+        assert fake.finished == []
+    assert fake.logged == [(0, entries[0]), (2, entries[1])]
+    assert fake.finished == [0]
+
+
+def test_wandb_sink_finishes_the_run_as_failed_when_training_raises(tmp_path, monkeypatch):
+    from ruling.train import WandbSink
+
+    fake = FakeWandb()
+    monkeypatch.setitem(sys.modules, "wandb", fake)
+    with pytest.raises(RuntimeError, match="out of memory"):
+        with WandbSink(None, _config(tmp_path)) as sink:
+            sink({"step": 0, "loss": 1.4})
+            raise RuntimeError("out of memory")
+    assert fake.init_calls[0]["project"] is None
+    assert fake.finished == [1]
+
+
+def test_wandb_sink_names_the_extra_to_install_when_the_package_is_missing(tmp_path, monkeypatch):
+    from ruling.train import WandbSink
+
+    monkeypatch.setitem(sys.modules, "wandb", None)
+    with pytest.raises(ImportError, match=r"pip install 'ruling\[wandb\]'"):
+        WandbSink("tickets", _config(tmp_path))

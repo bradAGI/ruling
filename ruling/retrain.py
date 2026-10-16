@@ -31,7 +31,7 @@ from ruling.engine import ADAPTER_CONFIG
 from ruling.evals import Observation, Record, collect, decision_blocks, fit, load_dataset
 from ruling.ledger import DecisionLedger
 from ruling.registry import build_engine
-from ruling.train import Trainer, TrainConfig, _state_key
+from ruling.train import TRAINING, Trainer, TrainConfig, _state_key
 
 CURRENT = "current"
 REPORT = "retrain.json"
@@ -121,15 +121,24 @@ def retrain(ledger: DecisionLedger, adapters: Path, model: str, holdout: list[Pa
 
 
 def history(adapters: Path) -> dict:
-    """Every finished run's report in version order, and the version `current` points at.
+    """Every finished run's report in version order, each with its training curve, and the version `current`
+    points at.
 
     A version still training, or one whose run failed, has no report and is left out."""
     link = adapters / CURRENT
-    reports = [json.loads((version / REPORT).read_text())
+    reports = [_report(version)
                for version in sorted((p for p in adapters.iterdir() if VERSION.fullmatch(p.name)),
                                      key=lambda p: int(p.name[1:]))
                if (version / REPORT).exists()] if adapters.exists() else []
     return {"current": link.resolve().name if link.exists() else None, "versions": reports}
+
+
+def _report(version: Path) -> dict:
+    """The version's report, with the history its trainer logged under `training` when the log is there."""
+    report = json.loads((version / REPORT).read_text())
+    if (version / TRAINING).exists():
+        report["training"] = json.loads((version / TRAINING).read_text())["history"]
+    return report
 
 
 def _lora_layout(adapter: Path | None) -> dict:

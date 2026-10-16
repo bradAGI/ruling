@@ -23,6 +23,8 @@
   .kept { color: var(--muted); }
   .serving { font-weight: bold; }
   .err { color: var(--accent); }
+  svg.curve { display: block; color: var(--bar); }
+  .kept svg.curve { color: var(--muted); }
 </style>
 </head>
 <body>
@@ -40,6 +42,23 @@ function text(value) {
   const span = document.createElement("span");
   span.textContent = value;
   return span.innerHTML;
+}
+const WIDTH = 120, HEIGHT = 28, PAD = 2;
+function curve(training) {
+  // Validation loss over steps, both axes scaled to the run; a flat run or a lone point sits on the middle line.
+  const steps = training.map(e => e.step), losses = training.map(e => e.loss);
+  const x0 = Math.min(...steps), x1 = Math.max(...steps), y0 = Math.min(...losses), y1 = Math.max(...losses);
+  const x = s => x1 === x0 ? WIDTH / 2 : PAD + (s - x0) / (x1 - x0) * (WIDTH - 2 * PAD);
+  const y = l => y1 === y0 ? HEIGHT / 2 : HEIGHT - PAD - (l - y0) / (y1 - y0) * (HEIGHT - 2 * PAD);
+  const points = training.map(e => `${x(e.step).toFixed(1)},${y(e.loss).toFixed(1)}`).join(" ");
+  const last = training[training.length - 1];
+  return `<svg class="curve" viewBox="0 0 ${WIDTH} ${HEIGHT}" width="${WIDTH}" height="${HEIGHT}" role="img" ` +
+         `aria-label="validation loss ${pct(training[0].loss)} to ${pct(last.loss)} over ${last.step} steps">` +
+         `<polyline points="${points}" fill="none" stroke="currentColor" stroke-width="1.5"/></svg>`;
+}
+function finalLoss(training) {
+  const last = training[training.length - 1];
+  return `${pct(last.train_loss)} / ${pct(last.loss)}`;
 }
 let key = "";
 try { key = sessionStorage.getItem("ruling-key") || ""; } catch {}
@@ -59,13 +78,16 @@ fetch("/v1/retrain", { headers: key ? { authorization: `Bearer ${key}` } : {} })
     html += `<h2>${text(m.name)} <span class="meta">serving ${text(m.current ?? "the base model")}</span></h2>`;
     if (!m.versions.length) { html += '<div class="meta">no finished runs yet</div>'; continue; }
     html += '<div class="scroll"><table><thead><tr><th>version</th><th>from</th><th class="num">records</th>' +
-            '<th class="num">held-out accuracy</th><th class="num">held-out log loss</th><th>verdict</th></tr></thead><tbody>';
+            '<th class="num">held-out accuracy</th><th class="num">held-out log loss</th>' +
+            '<th>validation loss</th><th class="num">final loss train / valid</th><th>verdict</th></tr></thead><tbody>';
     for (const v of [...m.versions].reverse()) {
       const serving = v.version === m.current ? " serving" : "";
       html += `<tr class="${v.promoted ? "promoted" : "kept"}${serving}" data-version="${text(v.version)}">` +
               `<td>${text(v.version)}</td><td>${text(v.started_from ?? "base")}</td>` +
               `<td class="num">${v.records}</td><td class="num">${change(v.current, v.candidate, "accuracy")}</td>` +
               `<td class="num">${change(v.current, v.candidate, "nll")}</td>` +
+              `<td>${v.training?.length ? curve(v.training) : "–"}</td>` +
+              `<td class="num">${v.training?.length ? finalLoss(v.training) : "–"}</td>` +
               `<td>${v.promoted ? "promoted" : "kept"}: ${text(v.reason)}</td></tr>`;
     }
     html += "</tbody></table></div>";

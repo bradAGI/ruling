@@ -28,6 +28,9 @@ ruling = "ruling.cli:main"
 vision = [
     "mlx-vlm>=0.7.8",
 ]
+wandb = [
+    "wandb>=0.19",
+]
 
 [dependency-groups]
 dev = [

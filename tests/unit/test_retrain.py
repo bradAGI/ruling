@@ -86,3 +86,17 @@ def test_history_lists_finished_versions_in_number_order_and_names_the_served_on
     assert listed["current"] == "v2"
     assert [v["version"] for v in listed["versions"]] == ["v1", "v2", "v10"]
     assert history(tmp_path / "missing") == {"current": None, "versions": []}
+
+
+def test_history_carries_each_versions_training_curve_when_its_log_exists(tmp_path):
+    from ruling.train import TRAINING
+
+    curve = [{"step": 0, "loss": 1.4}, {"step": 50, "loss": 1.1, "train_loss": 1.2, "progress": 1.0, "eta_seconds": 0.0}]
+    for number in (1, 2):
+        version = tmp_path / f"v{number}"
+        version.mkdir()
+        (version / REPORT).write_text(json.dumps({"version": version.name, "promoted": True}))
+    (tmp_path / "v1" / TRAINING).write_text(json.dumps({"config": {}, "history": curve}))
+    first, second = history(tmp_path)["versions"]
+    assert first["training"] == curve
+    assert "training" not in second

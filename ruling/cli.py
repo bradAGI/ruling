@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
 import dataclasses
 import io
 import json
@@ -119,6 +120,9 @@ def main(argv: list[str] | None = None) -> None:
                        help="continue from the checkpoint in --output; only --steps may differ from the original run")
     train.add_argument("--from-adapter", type=Path,
                        help="start a fresh run from this adapter's weights; its LoRA settings must match")
+    train.add_argument("--wandb", nargs="?", const="", metavar="PROJECT",
+                       help="mirror every progress entry to a Weights & Biases run, in PROJECT or the account's default "
+                            "(needs `pip install 'ruling[wandb]'`)")
 
     export = commands.add_parser("export-adapter", help="write a ruling adapter in PEFT layout for transformers")
     export.add_argument("adapter", type=Path, help="a LoRA directory from `ruling train`")
@@ -243,7 +247,7 @@ def main(argv: list[str] | None = None) -> None:
         print(f"wrote {len(records)} records to {args.output}")
         return
     if args.command == "train":
-        from ruling.train import Trainer, TrainConfig
+        from ruling.train import Trainer, TrainConfig, WandbSink
         options = {name.replace("-", "_"): getattr(args, name.replace("-", "_"))
                    for name in ("valid-fraction", "steps", "batch-size", "learning-rate", "max-grad-norm", "warmup", "lora-layers", "lora-rank",
                                 "lora-scale", "lora-dropout", "max-tokens", "eval-every", "valid-examples", "seed",
@@ -251,7 +255,11 @@ def main(argv: list[str] | None = None) -> None:
         config = TrainConfig(model=args.model or Settings.from_env().model, data=args.data, output=args.output,
                              holdout=args.holdout, grad_checkpoint=args.grad_checkpoint, from_adapter=args.from_adapter,
                              **{k: v for k, v in options.items() if v is not None})
-        Trainer(config, resume=args.resume).run()
+        # The sink is made before the model loads, so a missing package is reported at once.
+        sink = contextlib.nullcontext() if args.wandb is None else WandbSink(args.wandb or None, config)
+        trainer = Trainer(config, resume=args.resume)
+        with sink as entries:
+            trainer.run(sink=entries)
         return
     if args.command == "retrain":
         from ruling.ledger import DecisionLedger
