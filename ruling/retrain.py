@@ -101,6 +101,18 @@ def retrain(ledger: DecisionLedger, adapters: Path, model: str, holdout: list[Pa
     return report
 
 
+def history(adapters: Path) -> dict:
+    """Every finished run's report in version order, and the version `current` points at.
+
+    A version still training, or one whose run failed, has no report and is left out."""
+    link = adapters / CURRENT
+    reports = [json.loads((version / REPORT).read_text())
+               for version in sorted((p for p in adapters.iterdir() if VERSION.fullmatch(p.name)),
+                                     key=lambda p: int(p.name[1:]))
+               if (version / REPORT).exists()] if adapters.exists() else []
+    return {"current": link.resolve().name if link.exists() else None, "versions": reports}
+
+
 def _lora_layout(adapter: Path | None) -> dict:
     """The LoRA settings to train with: the starting adapter's, which its weights only fit, else the trainer's defaults."""
     if adapter is None:

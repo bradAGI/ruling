@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ruling retraining</title>
+<style>
+  :root { --bg: #fafaf7; --fg: #1b1b1b; --muted: #6b6b6b; --line: #dcdcd5; --bar: #2f6f4f; --accent: #b3451f; }
+  @media (prefers-color-scheme: dark) { :root { --bg: #161615; --fg: #ecece6; --muted: #9a9a92; --line: #33332f; --bar: #5fae85; --accent: #e0774d; } }
+  body { margin: 0; background: var(--bg); color: var(--fg); font: 15px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace; }
+  main { max-width: 960px; margin: 0 auto; padding: 24px 16px; display: grid; gap: 16px; }
+  h1 { margin: 0; font-size: 18px; }
+  h1 small, .meta { color: var(--muted); font-weight: normal; font-size: 12px; }
+  h1 small { margin-left: 8px; }
+  a { color: inherit; }
+  h2 { margin: 8px 0 4px; font-size: 15px; }
+  .scroll { overflow-x: auto; }
+  table { border-collapse: collapse; width: 100%; font-size: 13px; }
+  th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { color: var(--muted); font-weight: normal; font-size: 12px; }
+  td.num { text-align: right; white-space: nowrap; }
+  .promoted { color: var(--bar); }
+  .kept { color: var(--muted); }
+  .serving { font-weight: bold; }
+  .err { color: var(--accent); }
+</style>
+</head>
+<body>
+<main>
+  <h1>ruling <small>retraining history · <a href="/">playground</a></small></h1>
+  <div id="out" class="meta">loading…</div>
+</main>
+<script>
+const out = document.getElementById("out");
+const pct = x => x == null ? "–" : x.toFixed(3);
+function change(current, candidate, key) {
+  return `${pct(current[key])} → ${pct(candidate[key])}`;
+}
+function text(value) {
+  const span = document.createElement("span");
+  span.textContent = value;
+  return span.innerHTML;
+}
+fetch("/v1/retrain").then(async r => {
+  const data = await r.json();
+  if (!r.ok) throw new Error(`${r.status} ${data.error.code}: ${data.error.message}`);
+  return data;
+}).then(data => {
+  if (!data.models.length) {
+    out.innerHTML = "No served model is a <code>ruling retrain</code> adapter. Serve one with " +
+      "<code>RULING_ADAPTER=&lt;adapters&gt;/current</code>.";
+    return;
+  }
+  let html = "";
+  for (const m of data.models) {
+    html += `<h2>${text(m.name)} <span class="meta">serving ${text(m.current ?? "the base model")}</span></h2>`;
+    if (!m.versions.length) { html += '<div class="meta">no finished runs yet</div>'; continue; }
+    html += '<div class="scroll"><table><thead><tr><th>version</th><th>from</th><th class="num">records</th>' +
+            '<th class="num">held-out accuracy</th><th class="num">held-out log loss</th><th>verdict</th></tr></thead><tbody>';
+    for (const v of [...m.versions].reverse()) {
+      const serving = v.version === m.current ? " serving" : "";
+      html += `<tr class="${v.promoted ? "promoted" : "kept"}${serving}" data-version="${text(v.version)}">` +
+              `<td>${text(v.version)}</td><td>${text(v.started_from ?? "base")}</td>` +
+              `<td class="num">${v.records}</td><td class="num">${change(v.current, v.candidate, "accuracy")}</td>` +
+              `<td class="num">${change(v.current, v.candidate, "nll")}</td>` +
+              `<td>${v.promoted ? "promoted" : "kept"}: ${text(v.reason)}</td></tr>`;
+    }
+    html += "</tbody></table></div>";
+  }
+  out.className = "";
+  out.innerHTML = html;
+}).catch(e => { out.className = "err"; out.textContent = `could not load the history: ${e.message}`; });
+</script>
+</body>
+</html>

@@ -3,7 +3,9 @@
 import itertools
 
 from ruling.evals import Record
-from ruling.retrain import CURRENT, next_version, promote, should_promote, trainable
+import json
+
+from ruling.retrain import CURRENT, REPORT, history, next_version, promote, should_promote, trainable
 
 QUESTION = {"q": {"type": "noul", "instructions": "It is about money."}}
 
@@ -41,3 +43,16 @@ def test_decisions_on_held_out_states_never_reach_training():
               Record(state="A customer's state.", questions=QUESTION, labels={"q": False})]
     kept, dropped = trainable(served, held)
     assert [r.state for r in kept] == ["A customer's state."] and dropped == 1
+
+
+def test_history_lists_finished_versions_in_number_order_and_names_the_served_one(tmp_path):
+    for number in (1, 2, 10):
+        version = tmp_path / f"v{number}"
+        version.mkdir()
+        (version / REPORT).write_text(json.dumps({"version": version.name, "promoted": number != 10}))
+    (tmp_path / "v11").mkdir()  # still training: no report yet
+    promote(tmp_path, tmp_path / "v2")
+    listed = history(tmp_path)
+    assert listed["current"] == "v2"
+    assert [v["version"] for v in listed["versions"]] == ["v1", "v2", "v10"]
+    assert history(tmp_path / "missing") == {"current": None, "versions": []}

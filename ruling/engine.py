@@ -288,7 +288,7 @@ class Engine(TwoStageChoice):
         # The weights to put into the shared LoRA layers before answering. None until another
         # engine shares this model, since until then nothing can have swapped them out.
         self._lora_weights: dict[str, mx.array] | None = None
-        self._adapter_path = adapter
+        self.adapter_path = adapter
         self._priors: dict[int, np.ndarray] = {}
         calibration.check(self.provenance)
         self.calibration = calibration
@@ -319,12 +319,12 @@ class Engine(TwoStageChoice):
             raise Engine.IncompatibleAdapter(
                 f"{adapter} has LoRA layout {config}, but the loaded {self.model_id} was converted for {shared.lora}")
         if self._lora_weights is None and shared.lora is not None:
-            self._lora_weights = mx.load(str(self._adapter_path / ADAPTER_WEIGHTS))
+            self._lora_weights = mx.load(str(self.adapter_path / ADAPTER_WEIGHTS))
             mx.eval(list(self._lora_weights.values()))
         other = type(self).__new__(type(self))
         other.__dict__.update(self.__dict__)
         other._priors = {}
-        other._adapter_path = adapter
+        other.adapter_path = adapter
         other.adapter = adapter_digest(adapter)
         if shared.lora is None:
             other._lora_weights = None

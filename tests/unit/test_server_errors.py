@@ -197,3 +197,20 @@ def test_a_malformed_image_is_invalid_input_on_the_state():
         response = client.post("/v1/systemone", json=request)
     assert response.status_code == 422
     assert response.json()["error"]["code"] == "invalid_input" and response.json()["error"]["param"].startswith("state")
+
+
+def test_retraining_history_covers_only_retrain_adapters_and_needs_the_key(tmp_path):
+    from ruling.retrain import REPORT, promote
+
+    adapters = tmp_path / "tickets"
+    (adapters / "v1").mkdir(parents=True)
+    (adapters / "v1" / REPORT).write_text('{"version": "v1", "promoted": true}')
+    promote(adapters, adapters / "v1")
+    tuned, plain, pinned = FakeEngine("m"), FakeEngine("m"), FakeEngine("m")
+    tuned.adapter_path, pinned.adapter_path = adapters / "current", adapters / "v1"
+    app = app_with({"tuned": tuned, "plain": plain, "pinned": pinned}, "plain", api_key="k")
+    with TestClient(app) as client:
+        refused = client.get("/v1/retrain")
+        listed = client.get("/v1/retrain", headers={"authorization": "Bearer k"}).json()
+    assert refused.status_code == 401
+    assert listed == {"models": [{"name": "tuned", "current": "v1", "versions": [{"version": "v1", "promoted": True}]}]}

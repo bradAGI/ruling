@@ -28,9 +28,11 @@ from ruling.questions import (
     check_readable,
 )
 from ruling.registry import Registry, UnknownModel
+from ruling.retrain import CURRENT, history
 
 log = logging.getLogger("ruling")
 PLAYGROUND = Path(__file__).with_name("playground.html")
+HISTORY = Path(__file__).with_name("history.html")
 
 # Weight of the latest request in the running estimate of how long one takes, which
 # sizes the Retry-After a turned-away client is given.
@@ -166,6 +168,13 @@ def create_app(registry: Registry, api_key: str | None, max_pending: int,
     def models() -> ModelList:
         return ModelList(models=registry.info())
 
+    @app.get("/v1/retrain", dependencies=[Depends(authorize)])
+    def retraining() -> dict:
+        """Each served model whose adapter is a `ruling retrain` directory's `current` link, with its versions."""
+        return {"models": [{"name": name, **history(engine.adapter_path.parent)}
+                           for name, engine in registry.engines.items()
+                           if getattr(engine, "adapter_path", None) is not None and engine.adapter_path.name == CURRENT]}
+
     @app.get("/health")
     def health() -> dict[str, str | None]:
         engine = registry.engines[registry.default]
@@ -174,6 +183,10 @@ def create_app(registry: Registry, api_key: str | None, max_pending: int,
     @app.get("/", response_class=HTMLResponse, include_in_schema=False)
     def playground(request: Request) -> str:
         return PLAYGROUND.read_text()
+
+    @app.get("/history", response_class=HTMLResponse, include_in_schema=False)
+    def history_page() -> str:
+        return HISTORY.read_text()
 
     return app
 

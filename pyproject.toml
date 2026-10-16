@@ -35,6 +35,7 @@ dev = [
     "mlx-vlm>=0.7.8",
     "peft>=0.21.2",
     "pytest>=8",
+    "pytest-playwright>=0.7",
     "pytest-timeout>=2.4.0",
     "torch>=2.14.0",
     "typesafe-sdk>=0.6.0",
