@@ -1,10 +1,11 @@
-# Measurements, in full
+# Measurements
 
 The complete measurement record: how to run the harness, every model on every held-out set at every
 setting, what ordering averaging and post-training bought, latency, and the comparison with Jev's own
-published answers. The README carries the summary; this file carries everything, unchanged.
+published answers. [Results](results.md) carries the summary; this file carries everything, unchanged,
+with the command behind every number.
 
-## Evaluation and calibration
+## Running the harness
 
 Datasets are JSONL records with a state, questions in the API shape, and a
 label per question. Four are bundled and two more build from pinned public
@@ -30,7 +31,7 @@ log-likelihood. The file records the model, revision, rotation count, and
 debiasing setting it was fit under, and the server refuses to load it against
 anything else.
 
-## Measurements
+## Text decisions
 
 Every number in this section comes from one batch, run on 18 September 2026 on
 a single Apple Silicon Mac: one code version, one sitting, four models against
@@ -68,12 +69,6 @@ them. Every skips r=6: its questions carry at most three options, and the
 engine caps orderings at the option count, so r=6 there is the same computation
 as r=3.
 
-![Agreement with TypeSafe's reference against latency for three questions, with Jev's published accuracy marked](../assets/frontier.png)
-
-*What each model costs for what it gets right. Jev's line is its published
-accuracy; its latency is a vendor range, 70 to 500 ms, so it is drawn as a line
-rather than a point.*
-
 ### Other open decision models, run locally
 
 Four more trained decision models from the Hub, each run through its
@@ -103,7 +98,7 @@ bev-decider truncates states to 2,048 tokens, which affects 47 of those 102
 rows.
 
 Accuracy, as argmax agreement with each set's own reference labels, then
-coverage at a 5% error budget, all question types pooled, as in the README:
+coverage at a 5% error budget, all question types pooled, as in [Results](results.md):
 
 | model | typesafe102 (102) | authored144 (144) | perturbations108 (108) | Every (154) |
 |---|---|---|---|---|
@@ -216,117 +211,168 @@ Earlier batch, `Qwen3.5-4B-4bit`, kept because these two sets were not re-run.
 SST-5 is a five-way ordinal task where fine-tuned encoders reach about 0.59.
 Zero-shot, from a 4-bit 4B model, 0.53 with an ECE under 0.1 is usable.
 
+### Latency and throughput
 
+Median of five requests, short JSON state, engine warm, same batch as the
+accuracy numbers above.
 
+| Request | | Qwen3.5-4B | Qwen3-4B-Instruct | Qwen3.6-35B-A3B |
+|---|---|---:|---:|---:|
+| 3 questions (Choice + Score + Noul) | r=1 | 80 ms | 78 ms | 141 ms |
+| | r=3 | 136 ms | 116 ms | 204 ms |
+| 21 Noul questions, one state | r=1 | 216 ms, 97/s | 178 ms, 118/s | 263 ms, 80/s |
+| | r=3 | 495 ms, 42/s | 399 ms, 53/s | 606 ms, 35/s |
 
-### Tried and reverted: the question before the state on hosted models
+Every setting lands inside Jev's claimed 70 to 500 ms window for the
+three-question request, including the 35B that reaches Jev's accuracy on
+TypeSafe's rows. Run-to-run variation is real: the 35B measured 228 ms at r=3 a
+day earlier on the same machine, about 10% above this batch. Measured on an
+idle machine; under concurrent load the same requests took two to three times
+longer, because requests queue behind a lock rather than batching together.
 
-For `openai:` and `openrouter:` hosts the user turn briefly put the question
-and its options before the state, so a host that caches prompt prefixes could
-reuse the part that repeats across calls over different states. On a CPU
-host at 36 tokens a second that cut a call over a new state from 18 s to 1 s,
-and on Every's rows, one ordering, it looked free: 141 of 154 before, 140
-after. It was not free. The same 4-bit weights, `Qwen3-4B-Instruct-2507`,
-behind `mlx_lm.server`, scored on authored144 at three orderings in both
-layouts, next to the local engine on the same weights and the bf16 checkpoint:
+![Agreement with TypeSafe's reference against latency for three questions, with Jev's published accuracy marked](../assets/frontier.png)
 
-| run | correct / 144 | mean top probability | agrees with the local engine |
-|---|---:|---:|---:|
-| local MLX engine, 4-bit | 126 | 0.983 | |
-| hosted, state first | 126 | 0.983 | 144 of 144, probabilities within 0.002 |
-| hosted, question first | 115 | 0.940 | 116 of 144 |
-| local MLX engine, bf16 | 130 | 0.990 | 139 of 144 |
+*What each model costs for what it gets right. Jev's line is its published
+accuracy; its latency is a vendor range, 70 to 500 ms, so it is drawn as a line
+rather than a point.*
 
-With the state first the hosted readout reproduces the local engine exactly;
-with the question first the model changes its top answer on 28 questions and
-gets 11 more of them wrong. The hosted layout is the local one again, and the
-prefix a host reuses is the state, across a request's questions and
-orderings. This also closed the gap first seen on Linux: vLLM 0.31.0 on an
-L4 serving the bf16 checkpoint scored 121 of 144 with the question first and
-129 with the state first, one question from the bf16 checkpoint through the
-MLX engine on a Mac and in agreement with it on 143 of 144; the remaining
-three or four questions against the 4-bit MLX build are quantization. Every
-answer letter was in the host's top 20 logprobs on every call, so the readout
-had nothing to do with it.
+## Against Jev
 
-### Tried: calibration terms in the training objective
+Two public sources carry Jev's own answers on inputs anyone can replay.
+`ruling build-dataset typesafe` and `ruling build-dataset every` rebuild them
+with Jev's answer attached to every question, and `ruling eval` reports how
+often ruling lands on the same answer. Both were run with the default
+settings; the one-ordering numbers are in parentheses.
 
-`ruling train` accepts three optional terms, all off by default:
-`--label-smoothing`, `--brier-weight`, and `--ranking-weight`, which penalizes a
-wrong answer reported more confidently than a right one in the same batch. The
-v2 adapter was trained exactly like v1 (same data, holdouts, seed and steps)
-with smoothing 0.05, Brier weight 1.0 and ranking weight 1.0, then scored on
-the same four held-out sets.
+### TypeSafe's published evaluation cases
 
-| pooled, 508 judgments, three orderings | accuracy | coverage at 5% error | confidently wrong (p >= 0.9) | five most confident wrong answers |
-|---|---:|---:|---:|---|
-| v1 adapter, log loss only | 0.882 | 0.813 | 3.3% | 0.999, 0.999, 0.998, 0.997, 0.994 |
-| v2 adapter, with the three terms | 0.884 | 0.831 | 2.8% | 0.980, 0.978, 0.972, 0.971, 0.967 |
-| Clef-flash, for reference | 0.927 | 0.949 | 1.2% | 0.919, 0.919, 0.918, 0.916, 0.906 |
+![Jev against Qwen3.6-35B-A3B on TypeSafe's 102 published rows, Every's 154 author-labeled judgments, and the two pooled](../assets/against-jev.png)
 
-The terms did what they are built to do, in the right direction and by a
-small amount: accuracy unchanged, fewer confident errors, and the worst
-mistakes no longer reported at 0.999. Set by set the effect is not consistent;
-coverage on TypeSafe's 102 rows fell from 0.392 to 0.069, because coverage on a
-small set turns on where a handful of confident errors land. Clef-flash's lead
-is far larger than anything the loss moved, which points at its trained head
-and data rather than its objective. The terms stay available and off.
+TypeSafe's reference on these 102 questions is the mean of GPT-6 Astra and
+Claude Fable 5.1 at high reasoning, so this measures agreement with large models on workflows TypeSafe built,
+not accuracy against truth.
 
-### Tried and rejected: Gemma 4 31B as the base
-
-On the Decision Index, three separate readouts on stock Gemma 4 31B score 58
-to 60, above every untrained Qwen entry, so it was run through ruling
-unchanged on the four held-out sets: `mlx-community/gemma-4-31b-it-4bit` at
-`696d436c`, three orderings, ruling at `3475f27`, 14 October 2026. Google's
-quantization-aware-trained build (`mlx-community/gemma-4-31B-it-qat-OptiQ-4bit`
-at `b59347f3`, 5.2 bits per weight) was then run on the two sets where the gap
-was widest, to see whether the 4-bit conversion was to blame.
-
-| three orderings | typesafe102 | Every | authored144 | perturbations108 | pooled |
-|---|---:|---:|---:|---:|---:|
-| Gemma 4 31B, 4-bit | 81/102 | 113/154 | 127/144 | 96/108 | 417/508 |
-| Gemma 4 31B, quantization-aware build | | 119/154 | 128/144 | | |
-| Qwen3.6-35B-A3B, from above | 89/102 | 142/154 | 138/144 | 103/108 | 472/508 |
-| Clef-flash, from above | 91/102 | 147/154 | 130/144 | 103/108 | 471/508 |
-
-The readout is not the cause. On the wrong answers inspected, Gemma's
-unrestricted next token put essentially all its probability on the answer
-letters, so ruling read exactly what the model meant to say; it was wrong and
-certain, with mean confidence 0.99 and calibration error 0.11 to 0.26. On
-Every's yes/no rows 37 of its 41 errors say yes where the label is no, a lean
-that ordering averaging cannot remove because it is about meaning, not letter
-position. It also misses about three times as many choices as the 35B on the
-two authored sets. The better quantization gains one to six questions, far
-short of the gap.
-
-The Gemma entries that score well on the Decision Index each add a correction
-ruling does not: temperatures fitted on index questions, or a running prior
-over answers. Whether such a correction closes this gap was not tested. On
-these sets the 35B remains the base to use.
-
-### Tried and rejected: one-pass Choice above 62 options
-
-The letter readout has 62 single-token codes, so a Choice with more options
-runs as a tournament: every option judged alone as a Noul, the strongest eight
-into a final Choice. Qwen's tokenizer offers 691 single-token codes across
-Greek, Cyrillic, Latin-1, kana and CJK, so a 255-code alphabet was tried to
-read every option in one pass. On the 35B, one ordering, eight real
-77-to-151-option questions from the Decision Index sample:
-
-| readout | correct | time |
+| System | Agrees with TypeSafe's reference | Agrees with Jev's argmax |
 |---|---:|---:|
-| tournament, 62 codes | 5 of 8 | 73 s |
-| one pass, 255 codes | 3 of 8 | 5 s |
+| ruling, 35B-A3B, r=6 | **0.892** (91/102) | 0.853 |
+| Jev, published | 0.882 (90/102) | |
+| ruling, 35B-A3B, r=3 | 0.873 (89/102) | 0.853 |
+| ruling, 35B-A3B, r=1 | 0.853 (87/102) | 0.833 |
+| TheoLeeCJ/openjev, 4B BF16 | 0.85 | |
+| ruling, Qwen3-4B-Instruct + adapter, r=3 | 0.843 (86/102) | 0.824 |
+| ruling, Qwen3.5-4B, r=3 | 0.814 (83/102) | 0.824 |
 
-Fifteen times faster and worse, with the failure signature of label bias: the
-same unfamiliar glyph was chosen twice for different questions, and a correct
-answer near the end of the alphabet lost to one near the start. Eight rows is
-a small test, but it is the direction predicted before running it, so the
-tournament stays. The speed is real and worth having; getting it without the
-bias would take reading options from one decision position instead of from
-letter tokens, which is a trained head, not a prompt change.
+On the default 4B model Jev is better here by about seven points, and on the
+35B the two are level: 91 of 102 against Jev's 90 of 102. One question is a tie,
+not a lead.
 
-### Images: Glance's fresh photo sets
+Pooled with Every's 154 labeled judgments — every row anywhere that carries
+Jev's own answer — the 35B at shipped defaults gets 231 of 256 and Jev gets
+238. An exact McNemar test on the paired rows gives **p = 0.21**: no
+significant difference, with Jev nominally ahead. Taking the best rotation
+setting per dataset instead gives 235 of 256 and p = 0.66; that number is
+recorded here rather than quoted, because choosing a setting per dataset is
+tuning on the evaluation.
+
+### Every's parallel judgment lab
+
+[Every's parallel judgment lab](https://typesafe-parallel-judgment-lab.every-4573.chatgpt.site/)
+holds 758 judgments on 208 documents. Every recorded Jev's answers for nine
+experiments in August 2026. Three of them
+carry author labels (the support-reply judge grid and two retrieval grids,
+154 judgments); the rest measure agreement only.
+
+| | Jev | Qwen3.5-4B | 35B-A3B |
+|---|---:|---:|---:|
+| Accuracy on the 154 author-labeled judgments | **0.961** | 0.929 (0.916) | 0.922 (0.935) |
+| Agreement with Jev, all 758 judgments | | 0.858 (0.832) | 0.922 (0.921) |
+
+Jev leads on the author-labeled rows by three points against the 4B and four
+against the 35B; these 154 rows are the one place on this page where Jev is
+ahead of everything we run. The 35B tracks Jev's own answers much more closely
+than the 4B does, 0.922 against 0.858 across all 758 judgments. Note that both
+open models score *higher* than the 35B on the labeled subset at three
+orderings while agreeing with Jev *less* — agreement with Jev and accuracy
+against the authors are different measurements, and this set is small enough
+that a few questions separate them.
+
+**What the published data says about Jev's mechanism.** Every's file records
+token usage per experiment. Jev reports almost exactly 16 output tokens per
+judgment in every experiment (16.0 to 17.0 across six of them, from 5 to 21
+questions per call), and roughly 350 to 400 input tokens per call beyond the
+document and question text. A constant per-question output budget is
+consistent with a fixed answer block computed in parallel per question rather
+than a decoded string. Probabilities are published to two decimals. The
+models endpoint lists `jev-latest`, released 2026-09-10, and `jev-preview`.
+
+**Live comparison.** `ruling eval <dataset> --against typesafe` sends every
+record to the hosted API with `TYPESAFE_API_KEY` and reports Jev's live
+answers next to ruling's on the same rows, including the author-labeled
+datasets above where Jev has never been measured. The client speaks
+TypeSafe's protocol, which is the same as ruling's, and is tested end to end
+against a ruling server. It needs API credits on the TypeSafe account; the
+run for this page stopped at `402 Payment Required` before any call was
+scored.
+
+### JevBench, the public items
+
+[JevBench](https://github.com/fstandhartinger/jevbench) is a third-party
+leaderboard of 534 frozen typed decisions: routing, adequacy judging, policy
+checks, intent, ordinal severity, enum extraction. 231 are public; 303 are held
+out and only the operator runs them. Every system is asked through its own
+published interface and scored by argmax over the exact label set. We ran the
+231 public items through `ruling serve` with the 35B at shipped defaults, one
+request at a time, using the harness's own `typesafe` adapter unchanged; the
+other rows are the operator's published per-task outcomes on the same items.
+
+| system | all 231 | easy 48 | original 72 | hard 111 |
+|---|---:|---:|---:|---:|
+| GPT-5.6 Luna, low reasoning | 0.974 | 1.000 | 0.972 | 0.964 |
+| Gemini 3.1 Flash-Lite | 0.870 | 1.000 | 0.986 | 0.739 |
+| Jev 1.13.0 | 0.866 | 1.000 | 0.986 | 0.730 |
+| **ruling, Qwen3.6-35B-A3B, r=3** | **0.857** | 1.000 | 0.958 | **0.730** |
+| Clef-flash 9B, 4-bit MLX port, local | 0.792 | 1.000 | 0.944 | 0.604 |
+| openjev-sglang, Qwen3.6-35B-A3B | 0.853 | 1.000 | 0.944 | 0.730 |
+| SemIf, Qwen3.5-4B | 0.810 | 1.000 | 0.986 | 0.613 |
+| Bespoke Nimble 9B | 0.797 | 1.000 | 0.931 | 0.622 |
+| system-one-open, Gemma 4 E2B | 0.732 | 1.000 | 0.931 | 0.486 |
+| pplx-decider-v1.1-27b, 4-bit MLX port, local | 0.892 | 1.000 | 1.000 | 0.775 |
+| decider-4b v2.1, local | 0.831 | 1.000 | 0.986 | 0.658 |
+| decider-2b v11, local | 0.758 | 1.000 | 0.889 | 0.568 |
+| bev-decider-0.4B, local | 0.632 | 0.979 | 0.736 | 0.414 |
+
+Two of Jev's 231 decisions separate it from ruling, both on the original 72;
+on the 111 hard items, the long policy texts and multi-step reasoning where
+every open model drops, the two are identical at 81 of 111. The 35B behind
+`openjev-sglang` is the same weights read by a different engine, which puts
+the engine's contribution at about one decision. The ordinary instruction
+model at the top is the operator's own finding, not ours: this suite rewards
+reasoning more than the TypeSafe and Every rows do, and a general model with
+a little reasoning budget is out of reach for any one-pass readout here.
+
+Clef-flash was run the same way, against the community MLX port's own
+`/v1/systemone` server, unmodified. The four rows marked local below it were
+run the same way again on 13 October 2026, each against its own server as
+described under [Other open decision models](#other-open-decision-models-run-locally),
+with the harness's `typesafe` adapter pointed at `127.0.0.1`
+(`assets/bench/score.sh`; per-item results under `runs/bench/jevbench-<name>/`).
+pplx-decider leads every row here, open or hosted, except the instruction
+model at the top: 206 of 231, with all 72 original items and 86 of the 111
+hard ones against 81 for Jev and the 35B. bev-decider's card reports 46.8 on the hard tier where this run has 41.4
+(46 of 111 against 52); its easy and original tiers match the card exactly. It is level with Jev on TypeSafe's and
+Every's rows but drops on the hard tier: 67 of 111, against 81 for both Jev
+and the 35B.
+
+Latency on the 231 items, one request at a time on one Mac: p50 0.17 s, p95
+1.10 s. Calibration by tier, from the harness: easy ECE 0.000, original 0.044,
+hard 0.159 with a Brier of 0.431, so the hard items are where the probabilities
+overstate themselves as well as where the answers are wrong. Everything the
+harness wrote, per-decision outcomes and raw responses included, is
+reproducible with the commands in its README against a local `ruling serve`.
+
+## Images
+
+### Glance's fresh photo sets
 
 [Glance](https://github.com/yoheinakajima/glance) (Apache-2.0) reads the
 same kind of answer logits from Qwen3-VL-4B and publishes three sets of
@@ -379,6 +425,12 @@ stays 3 points short of Glance's 0.943, now by saying yes too often (12 of
 114 false statements) where the 4B said no too often. It takes 622 ms per
 decision at the median against the 4B's 374 ms, and 20 GB at peak, within
 ruling's default memory cap.
+
+Median latency per decision for the 4B on one Mac was 374 ms: 916 ms for a yes/no about
+a full-size Commons photo (Glance reports 1.1 s on an M5) and 277 ms on the
+smaller iNaturalist photos (Glance: 0.33 s). Peak memory for the run was
+4.1 GB. The photos stay out of this repository, as Glance keeps them out of
+its own; the scripts that fetched and scored them are not part of it either.
 
 ### Fine-tuning a vision model on photos
 
@@ -436,166 +488,111 @@ temperature is worth fitting when the miscalibration is larger than the
 noise of the set it is fit on, which an adapter's usually is and a base
 model's often is not.
 
-Median latency per decision for the 4B on one Mac was 374 ms: 916 ms for a yes/no about
-a full-size Commons photo (Glance reports 1.1 s on an M5) and 277 ms on the
-smaller iNaturalist photos (Glance: 0.33 s). Peak memory for the run was
-4.1 GB. The photos stay out of this repository, as Glance keeps them out of
-its own; the scripts that fetched and scored them are not part of it either.
+## Experiments that did not ship
 
-### Latency and throughput
+### The question before the state on hosted models
 
-Median of five requests, short JSON state, engine warm, same batch as the
-accuracy numbers above.
+**Tried and reverted.** For `openai:` and `openrouter:` hosts the user turn briefly put the question
+and its options before the state, so a host that caches prompt prefixes could
+reuse the part that repeats across calls over different states. On a CPU
+host at 36 tokens a second that cut a call over a new state from 18 s to 1 s,
+and on Every's rows, one ordering, it looked free: 141 of 154 before, 140
+after. It was not free. The same 4-bit weights, `Qwen3-4B-Instruct-2507`,
+behind `mlx_lm.server`, scored on authored144 at three orderings in both
+layouts, next to the local engine on the same weights and the bf16 checkpoint:
 
-| Request | | Qwen3.5-4B | Qwen3-4B-Instruct | Qwen3.6-35B-A3B |
-|---|---|---:|---:|---:|
-| 3 questions (Choice + Score + Noul) | r=1 | 80 ms | 78 ms | 141 ms |
-| | r=3 | 136 ms | 116 ms | 204 ms |
-| 21 Noul questions, one state | r=1 | 216 ms, 97/s | 178 ms, 118/s | 263 ms, 80/s |
-| | r=3 | 495 ms, 42/s | 399 ms, 53/s | 606 ms, 35/s |
-
-Every setting lands inside Jev's claimed 70 to 500 ms window for the
-three-question request, including the 35B that reaches Jev's accuracy on
-TypeSafe's rows. Run-to-run variation is real: the 35B measured 228 ms at r=3 a
-day earlier on the same machine, about 10% above this batch. Measured on an
-idle machine; under concurrent load the same requests took two to three times
-longer, because requests queue behind a lock rather than batching together.
-
-![Agreement with TypeSafe's reference against latency for three questions, with Jev's published accuracy marked](../assets/frontier.png)
-
-*What each model costs for what it gets right. Jev's line is its published
-accuracy; its latency is a vendor range, 70 to 500 ms, so it is drawn as a line
-rather than a point.*
-
-
-## JevBench, the public items
-
-[JevBench](https://github.com/fstandhartinger/jevbench) is a third-party
-leaderboard of 534 frozen typed decisions: routing, adequacy judging, policy
-checks, intent, ordinal severity, enum extraction. 231 are public; 303 are held
-out and only the operator runs them. Every system is asked through its own
-published interface and scored by argmax over the exact label set. We ran the
-231 public items through `ruling serve` with the 35B at shipped defaults, one
-request at a time, using the harness's own `typesafe` adapter unchanged; the
-other rows are the operator's published per-task outcomes on the same items.
-
-| system | all 231 | easy 48 | original 72 | hard 111 |
-|---|---:|---:|---:|---:|
-| GPT-5.6 Luna, low reasoning | 0.974 | 1.000 | 0.972 | 0.964 |
-| Gemini 3.1 Flash-Lite | 0.870 | 1.000 | 0.986 | 0.739 |
-| Jev 1.13.0 | 0.866 | 1.000 | 0.986 | 0.730 |
-| **ruling, Qwen3.6-35B-A3B, r=3** | **0.857** | 1.000 | 0.958 | **0.730** |
-| Clef-flash 9B, 4-bit MLX port, local | 0.792 | 1.000 | 0.944 | 0.604 |
-| openjev-sglang, Qwen3.6-35B-A3B | 0.853 | 1.000 | 0.944 | 0.730 |
-| SemIf, Qwen3.5-4B | 0.810 | 1.000 | 0.986 | 0.613 |
-| Bespoke Nimble 9B | 0.797 | 1.000 | 0.931 | 0.622 |
-| system-one-open, Gemma 4 E2B | 0.732 | 1.000 | 0.931 | 0.486 |
-| pplx-decider-v1.1-27b, 4-bit MLX port, local | 0.892 | 1.000 | 1.000 | 0.775 |
-| decider-4b v2.1, local | 0.831 | 1.000 | 0.986 | 0.658 |
-| decider-2b v11, local | 0.758 | 1.000 | 0.889 | 0.568 |
-| bev-decider-0.4B, local | 0.632 | 0.979 | 0.736 | 0.414 |
-
-Two of Jev's 231 decisions separate it from ruling, both on the original 72;
-on the 111 hard items, the long policy texts and multi-step reasoning where
-every open model drops, the two are identical at 81 of 111. The 35B behind
-`openjev-sglang` is the same weights read by a different engine, which puts
-the engine's contribution at about one decision. The ordinary instruction
-model at the top is the operator's own finding, not ours: this suite rewards
-reasoning more than the TypeSafe and Every rows do, and a general model with
-a little reasoning budget is out of reach for any one-pass readout here.
-
-Clef-flash was run the same way, against the community MLX port's own
-`/v1/systemone` server, unmodified. The four rows marked local below it were
-run the same way again on 13 October 2026, each against its own server as
-described under [Other open decision models](#other-open-decision-models-run-locally),
-with the harness's `typesafe` adapter pointed at `127.0.0.1`
-(`assets/bench/score.sh`; per-item results under `runs/bench/jevbench-<name>/`).
-pplx-decider leads every row here, open or hosted, except the instruction
-model at the top: 206 of 231, with all 72 original items and 86 of the 111
-hard ones against 81 for Jev and the 35B. bev-decider's card reports 46.8 on the hard tier where this run has 41.4
-(46 of 111 against 52); its easy and original tiers match the card exactly. It is level with Jev on TypeSafe's and
-Every's rows but drops on the hard tier: 67 of 111, against 81 for both Jev
-and the 35B.
-
-Latency on the 231 items, one request at a time on one Mac: p50 0.17 s, p95
-1.10 s. Calibration by tier, from the harness: easy ECE 0.000, original 0.044,
-hard 0.159 with a Brier of 0.431, so the hard items are where the probabilities
-overstate themselves as well as where the answers are wrong. Everything the
-harness wrote, per-decision outcomes and raw responses included, is
-reproducible with the commands in its README against a local `ruling serve`.
-
-## Against Jev itself
-
-Two public sources carry Jev's own answers on inputs anyone can replay.
-`ruling build-dataset typesafe` and `ruling build-dataset every` rebuild them
-with Jev's answer attached to every question, and `ruling eval` reports how
-often ruling lands on the same answer. Both were run with the default
-settings; the one-ordering numbers are in parentheses.
-
-![Jev against Qwen3.6-35B-A3B on TypeSafe's 102 published rows, Every's 154 author-labeled judgments, and the two pooled](../assets/against-jev.png)
-
-**TypeSafe's published evaluation cases, 102 questions.** TypeSafe's
-reference is the mean of GPT-6 Astra and Claude Fable 5.1 at high reasoning,
-so this measures agreement with large models on workflows TypeSafe built,
-not accuracy against truth.
-
-| System | Agrees with TypeSafe's reference | Agrees with Jev's argmax |
-|---|---:|---:|
-| ruling, 35B-A3B, r=6 | **0.892** (91/102) | 0.853 |
-| Jev, published | 0.882 (90/102) | |
-| ruling, 35B-A3B, r=3 | 0.873 (89/102) | 0.853 |
-| ruling, 35B-A3B, r=1 | 0.853 (87/102) | 0.833 |
-| TheoLeeCJ/openjev, 4B BF16 | 0.85 | |
-| ruling, Qwen3-4B-Instruct + adapter, r=3 | 0.843 (86/102) | 0.824 |
-| ruling, Qwen3.5-4B, r=3 | 0.814 (83/102) | 0.824 |
-
-On the default 4B model Jev is better here by about seven points, and on the
-35B the two are level: 91 of 102 against Jev's 90 of 102. One question is a tie,
-not a lead.
-
-Pooled with Every's 154 labeled judgments — every row anywhere that carries
-Jev's own answer — the 35B at shipped defaults gets 231 of 256 and Jev gets
-238. An exact McNemar test on the paired rows gives **p = 0.21**: no
-significant difference, with Jev nominally ahead. Taking the best rotation
-setting per dataset instead gives 235 of 256 and p = 0.66; that number is
-recorded here rather than quoted, because choosing a setting per dataset is
-tuning on the evaluation.
-
-**[Every's parallel judgment lab](https://typesafe-parallel-judgment-lab.every-4573.chatgpt.site/),
-758 judgments on 208 documents.** Every recorded Jev's answers for nine
-experiments in August 2026. Three of them
-carry author labels (the support-reply judge grid and two retrieval grids,
-154 judgments); the rest measure agreement only.
-
-| | Jev | Qwen3.5-4B | 35B-A3B |
+| run | correct / 144 | mean top probability | agrees with the local engine |
 |---|---:|---:|---:|
-| Accuracy on the 154 author-labeled judgments | **0.961** | 0.929 (0.916) | 0.922 (0.935) |
-| Agreement with Jev, all 758 judgments | | 0.858 (0.832) | 0.922 (0.921) |
+| local MLX engine, 4-bit | 126 | 0.983 | |
+| hosted, state first | 126 | 0.983 | 144 of 144, probabilities within 0.002 |
+| hosted, question first | 115 | 0.940 | 116 of 144 |
+| local MLX engine, bf16 | 130 | 0.990 | 139 of 144 |
 
-Jev leads on the author-labeled rows by three points against the 4B and four
-against the 35B; these 154 rows are the one place in this README where Jev is
-ahead of everything we run. The 35B tracks Jev's own answers much more closely
-than the 4B does, 0.922 against 0.858 across all 758 judgments. Note that both
-open models score *higher* than the 35B on the labeled subset at three
-orderings while agreeing with Jev *less* — agreement with Jev and accuracy
-against the authors are different measurements, and this set is small enough
-that a few questions separate them.
+With the state first the hosted readout reproduces the local engine exactly;
+with the question first the model changes its top answer on 28 questions and
+gets 11 more of them wrong. The hosted layout is the local one again, and the
+prefix a host reuses is the state, across a request's questions and
+orderings. This also closed the gap first seen on Linux: vLLM 0.31.0 on an
+L4 serving the bf16 checkpoint scored 121 of 144 with the question first and
+129 with the state first, one question from the bf16 checkpoint through the
+MLX engine on a Mac and in agreement with it on 143 of 144; the remaining
+three or four questions against the 4-bit MLX build are quantization. Every
+answer letter was in the host's top 20 logprobs on every call, so the readout
+had nothing to do with it.
 
-**What the published data says about Jev's mechanism.** Every's file records
-token usage per experiment. Jev reports almost exactly 16 output tokens per
-judgment in every experiment (16.0 to 17.0 across six of them, from 5 to 21
-questions per call), and roughly 350 to 400 input tokens per call beyond the
-document and question text. A constant per-question output budget is
-consistent with a fixed answer block computed in parallel per question rather
-than a decoded string. Probabilities are published to two decimals. The
-models endpoint lists `jev-latest`, released 2026-09-10, and `jev-preview`.
+### Calibration terms in the training objective
 
-**Live comparison.** `ruling eval <dataset> --against typesafe` sends every
-record to the hosted API with `TYPESAFE_API_KEY` and reports Jev's live
-answers next to ruling's on the same rows, including the author-labeled
-datasets above where Jev has never been measured. The client speaks
-TypeSafe's protocol, which is the same as ruling's, and is tested end to end
-against a ruling server. It needs API credits on the TypeSafe account; the
-run for this README stopped at `402 Payment Required` before any call was
-scored.
+**Tried and kept off.** `ruling train` accepts three optional terms, all off by default:
+`--label-smoothing`, `--brier-weight`, and `--ranking-weight`, which penalizes a
+wrong answer reported more confidently than a right one in the same batch. The
+v2 adapter was trained exactly like v1 (same data, holdouts, seed and steps)
+with smoothing 0.05, Brier weight 1.0 and ranking weight 1.0, then scored on
+the same four held-out sets.
 
+| pooled, 508 judgments, three orderings | accuracy | coverage at 5% error | confidently wrong (p >= 0.9) | five most confident wrong answers |
+|---|---:|---:|---:|---|
+| v1 adapter, log loss only | 0.882 | 0.813 | 3.3% | 0.999, 0.999, 0.998, 0.997, 0.994 |
+| v2 adapter, with the three terms | 0.884 | 0.831 | 2.8% | 0.980, 0.978, 0.972, 0.971, 0.967 |
+| Clef-flash, for reference | 0.927 | 0.949 | 1.2% | 0.919, 0.919, 0.918, 0.916, 0.906 |
+
+The terms did what they are built to do, in the right direction and by a
+small amount: accuracy unchanged, fewer confident errors, and the worst
+mistakes no longer reported at 0.999. Set by set the effect is not consistent;
+coverage on TypeSafe's 102 rows fell from 0.392 to 0.069, because coverage on a
+small set turns on where a handful of confident errors land. Clef-flash's lead
+is far larger than anything the loss moved, which points at its trained head
+and data rather than its objective. The terms stay available and off.
+
+### Gemma 4 31B as the base
+
+**Tried and rejected.** On the Decision Index, three separate readouts on stock Gemma 4 31B score 58
+to 60, above every untrained Qwen entry, so it was run through ruling
+unchanged on the four held-out sets: `mlx-community/gemma-4-31b-it-4bit` at
+`696d436c`, three orderings, ruling at `3475f27`, 14 October 2026. Google's
+quantization-aware-trained build (`mlx-community/gemma-4-31B-it-qat-OptiQ-4bit`
+at `b59347f3`, 5.2 bits per weight) was then run on the two sets where the gap
+was widest, to see whether the 4-bit conversion was to blame.
+
+| three orderings | typesafe102 | Every | authored144 | perturbations108 | pooled |
+|---|---:|---:|---:|---:|---:|
+| Gemma 4 31B, 4-bit | 81/102 | 113/154 | 127/144 | 96/108 | 417/508 |
+| Gemma 4 31B, quantization-aware build | | 119/154 | 128/144 | | |
+| Qwen3.6-35B-A3B, from above | 89/102 | 142/154 | 138/144 | 103/108 | 472/508 |
+| Clef-flash, from above | 91/102 | 147/154 | 130/144 | 103/108 | 471/508 |
+
+The readout is not the cause. On the wrong answers inspected, Gemma's
+unrestricted next token put essentially all its probability on the answer
+letters, so ruling read exactly what the model meant to say; it was wrong and
+certain, with mean confidence 0.99 and calibration error 0.11 to 0.26. On
+Every's yes/no rows 37 of its 41 errors say yes where the label is no, a lean
+that ordering averaging cannot remove because it is about meaning, not letter
+position. It also misses about three times as many choices as the 35B on the
+two authored sets. The better quantization gains one to six questions, far
+short of the gap.
+
+The Gemma entries that score well on the Decision Index each add a correction
+ruling does not: temperatures fitted on index questions, or a running prior
+over answers. Whether such a correction closes this gap was not tested. On
+these sets the 35B remains the base to use.
+
+### One-pass Choice above 62 options
+
+**Tried and rejected.** The letter readout has 62 single-token codes, so a Choice with more options
+runs as a tournament: every option judged alone as a Noul, the strongest eight
+into a final Choice. Qwen's tokenizer offers 691 single-token codes across
+Greek, Cyrillic, Latin-1, kana and CJK, so a 255-code alphabet was tried to
+read every option in one pass. On the 35B, one ordering, eight real
+77-to-151-option questions from the Decision Index sample:
+
+| readout | correct | time |
+|---|---:|---:|
+| tournament, 62 codes | 5 of 8 | 73 s |
+| one pass, 255 codes | 3 of 8 | 5 s |
+
+Fifteen times faster and worse, with the failure signature of label bias: the
+same unfamiliar glyph was chosen twice for different questions, and a correct
+answer near the end of the alphabet lost to one near the start. Eight rows is
+a small test, but it is the direction predicted before running it, so the
+tournament stays. The speed is real and worth having; getting it without the
+bias would take reading options from one decision position instead of from
+letter tokens, which is a trained head, not a prompt change.

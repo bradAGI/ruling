@@ -1,7 +1,5 @@
 # Background: Jev, and the other open recreations
 
-Moved here from the README so the front page leads with the result. Nothing below was cut.
-
 ## What Jev is, and what this reproduces
 
 Jev, launched September 15, 2026, is a closed hosted model that answers three
@@ -20,15 +18,16 @@ this contract: the state is shared across questions, each question is scored in
 its own branch that cannot see its siblings, options inside one question
 influence each other, and the answer is read as numbers rather than generated
 as text. TypeSafe has not confirmed that, but it matches every behavior we can
-measure from outside. The mechanism that buys the speed is the same either way:
+measure from outside; [Design notes](design.md) spells out what that evidence
+decided here. The mechanism that buys the speed is the same either way:
 encode the input once, read the model's scores at the answer position, restrict
-them to the declared options, normalize. ruling implements that mechanism on a stock
-instruction-tuned open model. On the two fixtures the other open recreation
-published, ruling scores higher than it reported — 0.920 against 0.813 on
-authored144, 0.684 against 0.637 on WANLI (see the comparison at the end). On
-TypeSafe's own published evaluation rows, a 19 GB open model running through
-ruling answers 91 of 102 questions the way TypeSafe's reference does, against
-Jev's 90, with no training of any kind.
+them to the declared options, normalize. ruling implements that mechanism on a
+stock instruction-tuned open model. On the two fixtures the other open
+recreation published, ruling scores higher than it reported, 0.920 against
+0.813 on authored144 and 0.684 against 0.637 on WANLI (see the comparison
+below). On TypeSafe's own published evaluation rows, a 19 GB open model running
+through ruling answers 91 of 102 questions the way TypeSafe's reference does,
+against Jev's 90, with no training of any kind.
 
 | | Jev (hosted) | ruling |
 |---|---|---|
@@ -42,10 +41,10 @@ Jev's 90, with no training of any kind.
 | TypeSafe's official SDK | Yes | Yes. Point `TYPESAFE_BASE_URL` at a ruling server and their unmodified client works; there is a test for it |
 | Context | ~32k tokens per question branch, ~64k per request | Same two limits by default, both configurable |
 | Weights | Closed | Any MLX chat model on Hugging Face |
-| Latency, 3 questions, short state | 70 to 500 ms, vendor claim | 80 to 136 ms on a 4B, 141 to 204 ms on the 19 GB model, see Measurements |
+| Latency, 3 questions, short state | 70 to 500 ms, vendor claim | 80 to 136 ms on a 4B, 141 to 204 ms on the 19 GB model, see [Measurements](measurements.md) |
 
 Not reproduced: RLCD training, Jev's parallel sampler, and frontier-level
-judgment. Read the Measurements section before trusting any number here.
+judgment. Read [Measurements](measurements.md) before trusting any number here.
 
 ## ruling versus TheoLeeCJ/openjev
 
@@ -69,14 +68,10 @@ Both read option logits from a Qwen3.5-4B model; everything above that differs.
 | Still theirs | Committed raw predictions, a WebGPU demo | |
 
 Same rows, same metrics, and on the 4B rows ruling runs a quantized version of
-the same base model. Procedures and caveats are in the comparison section at
-the end; the three fixtures in `datasets/` are theirs, converted and credited
-in [THIRD_PARTY.md](../THIRD_PARTY.md).
+the same base model. The three fixtures in `datasets/` are theirs, converted
+and credited in [THIRD_PARTY.md](../THIRD_PARTY.md).
 
-## Comparison with TheoLeeCJ/openjev, procedures and caveats
-
-The summary table is near the top. This section shows where each number comes
-from and what does not compare cleanly.
+### Procedures and caveats
 
 **Same rows, both systems**
 
@@ -121,16 +116,18 @@ nothing finer.
 
 - Cloudflare's [Clef and Clef-flash](https://blog.cloudflare.com/clef-decision-models/)
   (Apache-2.0): decision models with a trained head over frozen Qwen
-  backbones. The numbers above use the community
+  backbones. The numbers in [Results](results.md) use the community
   [MLX port](https://huggingface.co/mlx-community/clef-flash-4bit) of
   Clef-flash, unmodified, served by its own `clef_mlx.py` and reached through
   ruling's `typesafe:` engine.
-
+- Perplexity's pplx-decider and Mapika's decider models, the other trained
+  open decision models measured in [Results](results.md), each run through
+  its publisher's own code.
 - [Kev](https://github.com/jaredpalmer/kev), [SemIf](https://github.com/TheoLeeCJ/SemIf),
   [decider](https://github.com/Mapika/decider), [snellingio/system-one](https://github.com/snellingio/system-one):
-  the other open recreations. How they compare is in [docs/background.md](background.md).
+  the other open recreations.
 - Archer Hume, [Jev's Architecture Unmasked](https://archerhume.com/posts/jevs-architecture-unmasked/):
-  the black-box analysis the architecture notes lean on.
+  the black-box analysis the design notes lean on.
 - Zhao et al., *Calibrate Before Use* (2021); Guo et al., *On Calibration of
   Modern Neural Networks* (2017); Gneiting and Raftery, *Strictly Proper Scoring
   Rules* (2007): the methods behind the prior debiasing, the temperature scaling,

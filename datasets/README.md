@@ -31,7 +31,7 @@ Score). A soft label must cover every option, be non-negative, and sum to 1
 within 0.02; it becomes the `target` reference with the label set to its most
 likely option. A single-question row `{"state", "question", "label"}` becomes
 one question named `decision`. See the
-[evaluation reference](../docs/reference.md#evaluation) for the full table.
+[evaluation reference](../docs/reference.md#datasets) for the full table.
 
 ## Bundled
 

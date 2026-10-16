@@ -1,6 +1,9 @@
-# Reference: settings, models, API, clients
+# Reference
 
-Everything the front page summarizes, in full. Moved here to keep the README short; nothing was cut.
+The settings, models, command line, HTTP API, clients and dataset formats, in
+full. The walkthroughs are elsewhere: [Getting started](getting-started.md) for
+a first run, [Choosing models](models.md) for which model to serve, and
+[Fine-tuning](fine-tuning.md) for training on your own decisions.
 
 ## Install and run
 
@@ -12,19 +15,32 @@ ruling serve                 # http://127.0.0.1:8010, playground at /
 ```
 
 The first start downloads the default model, `mlx-community/Qwen3.5-4B-4bit`
-(about 2.3 GB). Settings come from the environment:
+(about 2.3 GB).
+
+## Settings
+
+Settings come from the environment. Model and scoring:
 
 | Variable | Default | Meaning |
 |---|---|---|
 | `RULING_MODEL` | `mlx-community/Qwen3.5-4B-4bit` | The primary model. Any MLX chat model, `openai:<model>` for a model behind an OpenAI-compatible server, `openrouter:<model>`, `vllm:<model or adapter>` for vLLM's own decision endpoint, `vision:<MLX model>` for a local vision-language model that also reads images in the state (needs `ruling[vision]`), or `typesafe:<alias>` for TypeSafe's API or any server speaking its protocol (`TYPESAFE_BASE_URL`, `TYPESAFE_API_KEY`). Tested: Qwen3.5, Llama 3.2, Gemma 3 |
-| `RULING_ROTATIONS` | `3` | Answer orderings averaged per question. `1` is fastest. See How it works |
+| `RULING_ROTATIONS` | `3` | Answer orderings averaged per question. `1` is fastest. See [How it works](how-it-works.md) |
 | `RULING_PRIOR_DEBIAS` | `false` | Subtract a content-free letter prior. Measured, does not help; kept so you can re-check with another model |
 | `RULING_CALIBRATION` | unset | Path to a `calibration.json` written by `ruling calibrate` |
-| `RULING_API_KEY` | unset | When set, `/v1/*` requires `Authorization: Bearer <key>` |
+
+Limits and memory:
+
+| Variable | Default | Meaning |
+|---|---|---|
 | `RULING_MAX_INPUT_TOKENS` | `65536` | Whole-request budget for a local MLX model: state plus every question. Above this the request is rejected with 422 `context_too_long`. Remote models (`openai:`, `vllm:`, `typesafe:`) are held to their host's own limit instead |
 | `RULING_MAX_BRANCH_TOKENS` | `32768` | Per-branch budget for a local MLX model: state plus one question. A single oversized question is rejected even when the request fits |
 | `RULING_MAX_IMAGE_TOKENS` | `1024` | Tokens one image may become on a `vision:` model; a larger image is scaled down to fit. A 12-megapixel photo is about 15,000 tokens uncapped |
 | `RULING_MEMORY_FRACTION`, `RULING_CACHE_LIMIT_GB` | `0.5`, `4` | MLX's ceiling as a share of physical memory, and how much freed buffer memory it may keep. A job that cannot fit raises instead of swapping. Ignored where the backend reports no memory size (Linux CPU) |
+
+Hosted models, for the `openai:`, `openrouter:` and `vllm:` prefixes:
+
+| Variable | Default | Meaning |
+|---|---|---|
 | `RULING_OPENAI_BASE_URL` | unset | Required for `openai:` models. The endpoint serving them, ending in `/v1` |
 | `RULING_OPENAI_API_KEY` | unset | Sent as a bearer token when the host wants one. Local servers usually do not |
 | `RULING_OPENAI_TOP_LOGPROBS` | `20` | How many top logprobs the host returns, and so the widest Choice read in one pass; wider ones run in two stages. At most 20. OpenAI allows 20, `mlx_lm.server` allows 11 |
@@ -34,15 +50,65 @@ The first start downloads the default model, `mlx-community/Qwen3.5-4B-4bit`
 | `RULING_OPENROUTER_BUDGET_USD` | `1.0` | Dollars an `openrouter:` engine may spend per process; past it, further requests fail |
 | `RULING_VLLM_BASE_URL` | unset | Required for `vllm:` models: the vLLM server, without a path. See [On NVIDIA: vLLM](#on-nvidia-vllm) |
 | `RULING_VLLM_API_KEY` | unset | Sent as a bearer token when the vLLM server was started with one |
+
+Adapters, cascade, failover and the models file:
+
+| Variable | Default | Meaning |
+|---|---|---|
 | `RULING_ADAPTER` | unset | A LoRA directory from `ruling train` or `ruling import-adapter`; see [docs/adapter.md](adapter.md) |
 | `RULING_CASCADE_TO` | unset | The secondary model, in the same syntax as `RULING_MODEL`; it answers only the questions the primary is unsure about |
 | `RULING_CASCADE_THRESHOLD` | unset | Top probability below which a question is escalated; required with `RULING_CASCADE_TO` |
 | `RULING_FAILOVER_TO` | unset | A model that answers the whole request whenever the primary is unavailable (429, 502–504, or a timeout); the response's `model` names whichever answered |
 | `RULING_MODELS` | unset | A JSON file of further models to serve by name beside the primary; see [Serve several models](#serve-several-models) |
+
+The ledger:
+
+| Variable | Default | Meaning |
+|---|---|---|
 | `RULING_LEDGER` | unset | A SQLite file that records every answered request not marked `exclude_from_training`, its state included, so outcomes can be reported and the decisions retrained on; see [Learn from your own traffic](#learn-from-your-own-traffic) |
 | `RULING_LEDGER_RETAIN_DAYS` | unset | With a ledger, how long a decision with no reported outcome is kept before it is dropped, state and all; decisions with outcomes are kept however old. Unset keeps everything |
+
+The server:
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `RULING_API_KEY` | unset | When set, `/v1/*` requires `Authorization: Bearer <key>` |
 | `RULING_MAX_PENDING` | `64` | Requests allowed in flight at once. The next one is refused with 429 `queue_full` and a `Retry-After` estimated from the queue and recent latency |
 | `RULING_HOST`, `RULING_PORT` | `127.0.0.1`, `8010` | Bind address |
+
+## Models
+
+### Bring your own model
+
+The readout needs one thing from a model: the probabilities of the next token,
+restricted to your options. Three ways to give ruling that, all behind the same
+API, all evaluated by the same harness:
+
+| Your model | `RULING_MODEL` | Notes |
+|---|---|---|
+| An MLX checkpoint | `mlx-community/...` or a local path | Fastest: one shared prefix cache, every question in one batched forward pass |
+| Anything you serve yourself | `openai:<model name>` | vLLM, SGLang, llama.cpp, LM Studio, `mlx_lm.server`, or a commercial API. Needs `/chat/completions` with `top_logprobs` |
+| A model on OpenRouter | `openrouter:<model>` | Adds provider pinning and a spend budget |
+
+```bash
+python -m mlx_lm server --model mlx-community/Qwen3.5-4B-4bit --port 8080 &
+
+export RULING_MODEL=openai:mlx-community/Qwen3.5-4B-4bit
+export RULING_OPENAI_BASE_URL=http://127.0.0.1:8080/v1
+export RULING_OPENAI_TOP_LOGPROBS=11
+export RULING_OPENAI_CONCURRENCY=1
+export RULING_OPENAI_EXTRA_BODY='{"chat_template_kwargs": {"enable_thinking": false}}'
+uv run ruling eval datasets/authored144.jsonl
+```
+
+What a hosted model costs you: a Choice wider than the host's logprobs runs in
+two stages, one call per option and then a final call, where the local engine
+reads 62 options in one pass; there is no shared prefix cache, so the state is
+re-read for every question unless the host caches prefixes; and a reasoning
+model has to be told to stop reasoning, differently on each host. What it buys:
+your model, your hardware, any platform. An integration test runs this path end
+to end against a real server and checks the distributions match the local
+engine's.
 
 ### Serve several models
 
@@ -99,46 +165,6 @@ every open model we measured, 206 of JevBench's 231 public items (see
 refuses prompts over 8,192 tokens, and that refusal reaches your client as an
 error rather than an answer.
 
-### Bring your own model
-
-The readout needs one thing from a model: the probabilities of the next token,
-restricted to your options. Three ways to give ruling that, all behind the same
-API, all evaluated by the same harness:
-
-| Your model | `RULING_MODEL` | Notes |
-|---|---|---|
-| An MLX checkpoint | `mlx-community/...` or a local path | Fastest: one shared prefix cache, every question in one batched forward pass |
-| Anything you serve yourself | `openai:<model name>` | vLLM, SGLang, llama.cpp, LM Studio, `mlx_lm.server`, or a commercial API. Needs `/chat/completions` with `top_logprobs` |
-| A model on OpenRouter | `openrouter:<model>` | Adds provider pinning and a spend budget |
-
-```bash
-python -m mlx_lm server --model mlx-community/Qwen3.5-4B-4bit --port 8080 &
-
-export RULING_MODEL=openai:mlx-community/Qwen3.5-4B-4bit
-export RULING_OPENAI_BASE_URL=http://127.0.0.1:8080/v1
-export RULING_OPENAI_TOP_LOGPROBS=11
-export RULING_OPENAI_CONCURRENCY=1
-export RULING_OPENAI_EXTRA_BODY='{"chat_template_kwargs": {"enable_thinking": false}}'
-uv run ruling eval datasets/authored144.jsonl
-```
-
-What a hosted model costs you: a Choice wider than the host's logprobs runs in
-two stages, one call per option and then a final call, where the local engine
-reads 62 options in one pass; there is no shared prefix cache, so the state is
-re-read for every question unless the host caches prefixes; and a reasoning
-model has to be told to stop reasoning, differently on each host. What it buys: your model, your hardware,
-any platform. An integration test runs this path end to end against a real
-server and checks the distributions match the local engine's.
-
-One-shot, without a server:
-
-```bash
-uv run ruling ask "Since this morning every request with our API key returns 401." \
-  --choice "team=Which team should handle this?|billing,technical,sales" \
-  --score  "urgency=How urgent is this?|Can wait,This week,Today" \
-  --noul   "blocked=The customer is blocked from using the product."
-```
-
 ### On NVIDIA: vLLM
 
 ruling's scoring runs on Apple Silicon through MLX. On NVIDIA (or AMD through
@@ -158,15 +184,17 @@ RULING_VLLM_BASE_URL=http://gpu-box:8000 RULING_MODEL=vllm:tickets uv run ruling
 ```
 
 An adapter trained here goes across with `ruling export-adapter` (see
-[Training](#training)). A `vllm:` model is any name vLLM lists at its
-`/v1/models`: the base, or an adapter. It can be the primary, a registry
-entry beside local models, or the secondary of a cascade; calibration files
-fit on it with `ruling calibrate` apply as for any other engine. vLLM labels
-options A to Z, so a choice wider than 26 runs in two stages, as on an
-`openai:` host: every option is first judged on its own as a yes/no question,
-64 to a request, and the strongest 8 go to a final choice. vLLM also serves Cloudflare's Clef-flash, Clef-omni and Liquid's
-d1 on the same endpoint with their own prompts, so `vllm:Cloudflare/clef-flash`
-is the hosted equivalent of the MLX port used in the measurements.
+[export-adapter and import-adapter](#export-adapter-and-import-adapter)). A
+`vllm:` model is any name vLLM lists at its `/v1/models`: the base, or an
+adapter. It can be the primary, a registry entry beside local models, or the
+secondary of a cascade; calibration files fit on it with `ruling calibrate`
+apply as for any other engine. vLLM labels options A to Z, so a choice wider
+than 26 runs in two stages, as on an `openai:` host: every option is first
+judged on its own as a yes/no question, 64 to a request, and the strongest 8
+go to a final choice. vLLM also serves Cloudflare's Clef-flash, Clef-omni and
+Liquid's d1 on the same endpoint with their own prompts, so
+`vllm:Cloudflare/clef-flash` is the hosted equivalent of the MLX port used in
+the measurements.
 
 Until that endpoint is in a release, a stock vLLM works through the `openai:`
 path, with ruling itself on Linux using MLX's CPU wheel (it holds no weights
@@ -184,16 +212,126 @@ tests pass on Linux, `ruling eval` scored authored144 at three orderings in
 32 s (129 of 144, one question apart from the same bf16 checkpoint through the
 MLX engine on a Mac, which agrees with it on 143 of 144; the 4-bit MLX build
 gets 126), a 77-option choice was answered in two stages in 2.2 s, and three
-questions took 150 ms at the median. vLLM 0.31.0 crashed there while capturing CUDA graphs;
-`--enforce-eager` avoids it, at some cost in speed.
+questions took 150 ms at the median. vLLM 0.31.0 crashed there while capturing
+CUDA graphs; `--enforce-eager` avoids it, at some cost in speed.
 
-## Training
+## Command line
+
+`ruling --help` lists thirteen commands:
+
+| Command | Purpose |
+|---|---|
+| `serve` | run the HTTP API |
+| `ask` | answer questions once, without a server |
+| `eval` | score a labeled dataset and report metrics |
+| `calibrate` | fit per-type temperatures on a labeled dataset |
+| `predict` | answer every question of every row, labels ignored, as JSONL |
+| `build-dataset` | download a pinned public dataset into ruling format |
+| `build-corpus` | build training records from open data, program state, or synthetic worlds |
+| `train` | LoRA fine-tune the answer readout on training records |
+| `export-adapter` | write a ruling adapter in PEFT layout for transformers |
+| `import-adapter` | write a PEFT LoRA adapter in the layout ruling serves |
+| `export-decisions` | write the served decisions that have outcomes as training records |
+| `retrain` | train on the ledger's resolved decisions and promote the result only if it beats the served adapter on held-out data |
+| `train-encoder` | fully fine-tune a decision encoder on training records |
+
+`serve` takes no flags; everything it needs is in [Settings](#settings).
+
+### Engine flags
+
+`ask`, `eval`, `calibrate` and `predict` build an engine the way `serve` does,
+and each of these flags overrides the matching setting for that one run:
+
+| Flag | Overrides |
+|---|---|
+| `--model MODEL` | `RULING_MODEL` |
+| `--rotations N` | `RULING_ROTATIONS` |
+| `--prior-debias {on,off}` | `RULING_PRIOR_DEBIAS` |
+| `--calibration PATH` | `RULING_CALIBRATION` |
+| `--adapter DIR` | `RULING_ADAPTER`, a LoRA directory from `ruling train` |
+
+### ask
+
+`ruling ask STATE` answers once, without a server, and prints the response as
+JSON. `STATE` is the state text, or `@path` to read it from a file; text that
+parses as JSON is sent as JSON. Questions come from `--choice ID=Q|a,b,c`,
+`--score ID=Q|lo,mid,hi` and `--noul ID=STATEMENT`, each repeatable, at least
+one required:
+
+```bash
+uv run ruling ask "Since this morning every request with our API key returns 401." \
+  --choice "team=Which team should handle this?|billing,technical,sales" \
+  --score  "urgency=How urgent is this?|Can wait,This week,Today" \
+  --noul   "blocked=The customer is blocked from using the product."
+```
+
+### eval, calibrate and predict
+
+`ruling eval DATASET` scores a labeled dataset (any shape under
+[Datasets](#datasets)) and prints the report described under
+[Evaluation output](#evaluation-output) as one JSON object; `--output FILE`
+writes it there instead of stdout. `--predictions FILE` also writes each
+question's distribution as JSONL. `--against typesafe` also sends every record
+to the hosted TypeSafe API (`TYPESAFE_API_KEY`) and reports agreement;
+`--typesafe-model ALIAS` picks the model there, the service default when
+omitted.
+
+`ruling calibrate DATASET` fits per-type temperatures on a labeled dataset and
+prints them with the per-type summaries before and after. `--output FILE`
+writes the `calibration.json` that `RULING_CALIBRATION` and `--calibration`
+read.
+
+Both take `--think-tokens N`, which lets a decoder model reason up to that many
+tokens before each answer (slow; for teachers).
+
+`ruling predict ROWS --output ANSWERS` answers every question of every row in
+any dataset form, labels ignored, without a server. It writes one JSON line per
+row, in the rows' order: `{"id", "answers"}` with each answer exactly as
+`/v1/systemone` returns it, or `{"id", "error": {"code", "message"}}` with the
+API's code (`context_too_long`, `invalid_options`, `unsupported_modality`) for
+a row the model cannot answer, so line *i* is always row *i*. Each line is
+written as it is answered; run the same command again after an interruption and
+it carries on after the last line. Against a running server,
+[`POST /v1/predict`](#post-v1predict-and-post-v1evaluations) answers the same
+rows with the same per-row entries in one request, and `POST /v1/evaluations`
+scores them; `client.predict(rows)` and `client.evaluate(rows)` in the
+[Python client](#python) call them.
+
+To turn a strong model's answers into training targets for a small one, use
+`ruling build-corpus answers --questions ROWS --writer MODEL` instead: it keeps
+each answer's full distribution as a soft label.
+
+### build-dataset and build-corpus
+
+`ruling build-dataset NAME --output FILE` downloads a pinned public dataset
+into ruling format. `NAME` is one of `wanli`, `sst5`, `typesafe`, `every` or
+`dev`; `--limit N` (default 300) is the rows to sample for `sst5`, or the rows
+per source for `dev`.
+
+`ruling build-corpus KIND --output FILE` builds training records from open
+data, program state, or synthetic worlds. `KIND` is `public`, `states`,
+`worlds`, `questions` or `answers`; every kind but `answers` needs `--count`
+(records per public source, or total states, worlds, or question sets), and
+`answers` needs `--questions`, the question records to answer. `--writer`
+names the writer and judge model (defaulting to `RULING_MODEL`), `--teacher
+{model,typesafe}` answers with the `--writer` model (local, or
+`openrouter:<model>`) or the hosted TypeSafe API, and `--holdout` lists the
+evaluation datasets whose states are never distilled, the bundled ones by
+default. The rest of its flags (`--seed`, `--catalog`, `--batch-size`,
+`--min-probability`, `--temperature`, `--states`, `--questions-per-state`,
+`--max-options`, `--rotations`, `--think-tokens`) are in `ruling build-corpus
+--help`. The record format is in [datasets/README.md](../datasets/README.md)
+and the recipe that puts these together is in [docs/adapter.md](adapter.md).
+
+### train
 
 `ruling train --data RECORDS... --output DIR` LoRA-fine-tunes the answer
 readout; [Fine-tuning](fine-tuning.md) walks through a run and [docs/adapter.md](adapter.md)
-describes the adapter it produces. Beyond the hyperparameters (`--steps`,
-`--learning-rate`, `--lora-layers`, `--lora-rank`, `--lora-scale`, and the
-rest of `ruling train --help`):
+describes the adapter it produces. `--model` picks the base (defaulting to
+`RULING_MODEL`) and `--holdout` the evaluation datasets whose states must not
+appear in training data, the bundled ones by default. Beyond the
+hyperparameters (`--steps`, `--learning-rate`, `--lora-layers`, `--lora-rank`,
+`--lora-scale`, and the rest of `ruling train --help`):
 
 | Flag | Meaning |
 |---|---|
@@ -201,6 +339,14 @@ rest of `ruling train --help`):
 | `--from-adapter DIR` | Start a fresh run, fresh optimizer and step 0, from an existing adapter's weights. Its `adapter_config.json` must match the requested LoRA layers, rank, scale and dropout |
 | `--max-image-tokens N` | Tokens one image may become when `--model` is a `vision:` model (default 1024); keep it equal to the server's `RULING_MAX_IMAGE_TOKENS` so the adapter sees images as they will be served |
 | `--wandb [PROJECT]` | Mirror every progress line (step, losses, `progress`, `eta_seconds`, and the validation metrics) to a Weights & Biases run in `PROJECT`, or the account's default, opened on the run's config and finished when the run ends, marked failed if it raised. Needs the `wandb` extra: `uv sync --extra wandb` or `pip install 'ruling[wandb]'` |
+| `--label-smoothing F` | Mix this share of a uniform distribution over the options into each target before the cross-entropy (default 0) |
+| `--brier-weight F` | Add the Brier score (squared error between probabilities and target) to the loss at this weight (default 0) |
+| `--ranking-weight F` | Add a pairwise ranking term at this weight (default 0): within a batch, a wrong answer more confident than a right one is penalized |
+| `--ranking-margin F` | How much more confident a right answer must be than a wrong one before the ranking term is satisfied (default 0.05) |
+| `--no-grad-checkpoint` | Keep all activations; faster but needs far more memory |
+
+With all of `--label-smoothing`, `--brier-weight` and `--ranking-weight` at
+their defaults the loss is exactly the soft-target cross-entropy.
 
 **Records with images.** With `--model vision:<model>`, records whose states
 hold images train as they are served: the image tokens sit in the prompt, the
@@ -214,6 +360,8 @@ from 2.3 to 0.4; far fewer steps, or higher rates, left it at chance.
 
 The top-level adapter files in `DIR` are always the best validation loss so
 far; `DIR/checkpoint/` is the latest step. Serve the former.
+
+### export-adapter and import-adapter
 
 `ruling export-adapter DIR --output PEFT_DIR --base-model HF_ID` writes the
 adapter in PEFT's layout, `adapter_model.safetensors` plus a `LoraConfig`,
@@ -265,20 +413,32 @@ at its own fitted temperature, because training sharpens an adapter faster
 than it corrects it and a version that is right more often must not lose for
 being overconfident. The candidate's temperatures are saved beside its weights
 as `calibration.json`, so `RULING_CALIBRATION=<adapters>/current/calibration.json`
-serves the promoted version calibrated. Every version
-directory keeps its training records, its training log and `retrain.json`,
-the comparison and the reason for the verdict, promoted or not. The server's
-`/history` page lists every version with those verdicts and, from the
-training log, its validation-loss curve and final train and validation
-loss. Until
+serves the promoted version calibrated. Every version directory keeps its
+training records, its training log and `retrain.json`, the comparison and the
+reason for the verdict, promoted or not. The server's `/history` page lists
+every version with those verdicts and, from the training log, its
+validation-loss curve and final train and validation loss. Until
 `--min-records` decisions (100 by default) have outcomes, a run does nothing.
-`--steps`, `--learning-rate`, `--batch-size`, `--warmup`, `--eval-every`,
+`--model` picks the base, defaulting to `RULING_MODEL`. `--steps`,
+`--learning-rate`, `--batch-size`, `--warmup`, `--eval-every`,
 `--valid-fraction` and `--seed` reach the trainer; the LoRA layout always
 follows the version it starts from.
 
+### train-encoder
+
+`ruling train-encoder --data RECORDS... --output DIR --base REPO --revision
+COMMIT` fully fine-tunes a ModernBERT-architecture encoder on training records,
+`--base` naming the encoder repository and `--revision` the commit to pin.
+`--holdout` works as for `train`, and the hyperparameters (`--valid-fraction`,
+`--steps`, `--batch-tokens`, `--learning-rate`, `--head-learning-rate`,
+`--weight-decay`, `--warmup`, `--max-tokens`, `--eval-every`,
+`--valid-records`, `--seed`, `--no-grad-checkpoint`) are in `ruling
+train-encoder --help`. What the encoder is and how it measured is in
+[design.md](design.md#first-decision-encoder).
+
 ## API
 
-`POST /v1/systemone`
+### POST /v1/systemone
 
 ```json
 {
@@ -321,7 +481,7 @@ themselves under those names, so a question can say "the receipt in
   against them, as for text. Eight 12-megapixel photos with nine questions
   took 10 s and 7.2 GB at peak on the 4B model, every color question right.
   A `vision:` model serves an adapter like any other model, and trains on
-  records whose states hold images; see [Training](#training).
+  records whose states hold images; see [train](#train).
 - **Any vision model behind an OpenAI-compatible server** (vLLM, SGLang,
   `mlx_vlm.server`): `openai:` models get the images as content parts.
 - **`typesafe:`** forwards the state unchanged; the remote service decides.
@@ -340,37 +500,20 @@ Answers come back keyed by the same ids:
 With a ledger configured, the response also carries `id`, the decision to
 report an outcome for; without one the body is exactly the hosted API's.
 
-`POST /v1/decisions/<id>/outcome` with `{"labels": {"<id>": label}}` records
-what was right, and returns the labels as stored; it exists only with a ledger.
-
 `usage.input_tokens` counts every token the model processed: the shared prefix
 once, plus each question suffix for each ordering. `output_tokens` is always 0.
 
 The response's `model` is the name the request selected; the primary reports
 its engine's id, which a failover changes to say which side answered.
 
-Errors come in the hosted API's shape, `{"error": {"code", "message",
-"param"?}}`, where `code` is stable for programs and `message` is for people:
+### POST /v1/decisions/{id}/outcome
 
-| Status | `code` | When |
-|---|---|---|
-| 422 | `invalid_input` | a malformed request: `param` names the field, such as a choice over 255 options, a score over 10 levels, or more than 64 questions |
-| 422 | `invalid_options` | a well-formed question the model cannot answer: a choice with one option or more than the model reads, or nothing to ask; `param` is `questions.<id>` |
-| 422 | `unsupported_modality` | the state holds images and the selected model reads only text; `param` is `state` |
-| 422 | `context_too_long` | a request over a token limit; `param` is `questions.<id>` when one question is at fault |
-| 422 | `invalid_input` | without `param`: a request the engine refuses, such as one a remote decision server rejects, or a body sent as `Content-Encoding: gzip` that does not inflate; on the outcome route, `param` is `labels` for a label that does not fit the logged question; on the batch routes, `param` is `rows` for no rows, more than 50,000, or none with labels, and `rows.<i>` for a row an evaluation cannot score |
-| 404 | `unknown_model` | a `model` the server does not answer for; the message lists the names it does |
-| 404 | `unknown_decision` | an outcome for an id the ledger does not hold |
-| 401 | `unauthorized` | an API key is configured and missing or wrong |
-| 429 | `queue_full` | `RULING_MAX_PENDING` requests are already in flight; `Retry-After` says how many seconds to wait |
-| 503 | `upstream_unavailable` | the selected model is served remotely and its host is down, with no failover |
+`POST /v1/decisions/<id>/outcome` with `{"labels": {"<id>": label}}` records
+what was right, and returns the labels as stored; it exists only with a ledger.
+See [Learn from your own traffic](#learn-from-your-own-traffic) for the label
+forms it accepts and what happens to the decisions afterward.
 
-TypeSafe's SDK reads `error.message` from this shape and retries 429 honoring
-`Retry-After`, so both clients and
-[rulesmith](https://github.com/bradAGI/rulesmith), which uses ruling as its
-local judge, behave the same against ruling and the hosted services.
-
-### Batches: `POST /v1/predict` and `POST /v1/evaluations`
+### POST /v1/predict and POST /v1/evaluations
 
 Both take `{"model"?, "rows": [...]}`, 1 to 50,000 rows, each in any shape
 `ruling predict` and `ruling eval` read (see [Datasets](#datasets)): a record
@@ -403,15 +546,15 @@ batch's total.
 
 `POST /v1/evaluations` scores the rows against their labels and returns
 `{"model", ...}` with exactly what `ruling eval` prints, described under
-[Output](#output): `question_types`, `overall`, `by_type` and `by_question`,
-so a client gets accuracy, `nll`, `brier`, `ece`, `mean_confidence` and
-`selective` per type and per question without a dataset on disk. A row too
-long for the model counts as `unscored` in its type's summary; a row the
-model cannot read at all (a one-option choice, images for a text model) is a
-422 with `param` `rows.<i>`, and a batch with no labels at all is 422
-`invalid_input` on `rows`.
+[Evaluation output](#evaluation-output): `question_types`, `overall`, `by_type`
+and `by_question`, so a client gets accuracy, `nll`, `brier`, `ece`,
+`mean_confidence` and `selective` per type and per question without a dataset
+on disk. A row too long for the model counts as `unscored` in its type's
+summary; a row the model cannot read at all (a one-option choice, images for a
+text model) is a 422 with `param` `rows.<i>`, and a batch with no labels at all
+is 422 `invalid_input` on `rows`.
 
-### Usage: `GET /v1/usage`
+### GET /v1/usage
 
 ```json
 {"usage": [{"hour": "2026-10-16T14:00:00+00:00", "model": "large", "decisions": 312, "input_tokens": 91044}]}
@@ -425,18 +568,26 @@ datetimes; a naive one is read as UTC) keep the buckets whose hour starts
 within the window. The counts are kept in memory for the server's lifetime: a
 restart starts them over, and nothing is written to disk.
 
-### Compressed bodies
-
-A POST body may be sent with `Content-Encoding: gzip`; the server inflates it
-before reading it, and a body that does not inflate is 422 `invalid_input`. A
-batch of thousands of rows shrinks several times over, and the Python client
-does this on its own for any body of 64 KB or more.
+### GET /v1/models, GET /v1/retrain and GET /health
 
 `GET /v1/models` returns `{"models": [...]}` with the hosted API's `name`,
 `description` and `release_date`, plus `base` (the weights behind the name),
 the Hugging Face revision, adapter digest, the calibration temperatures in
-force, and limits that only a local engine knows. `GET /health` returns the
-primary's name.
+force, and limits that only a local engine knows.
+
+`GET /v1/retrain` returns what the `/history` page shows: for each served
+model whose adapter is a `ruling retrain` directory's `current` link,
+`{"models": [{"name", "current", "versions": [...]}]}`, where `current` is the
+version directory the link points at (`null` when there is none) and
+`versions` holds, in version order, the `retrain.json` report of every
+finished run, each with its `training` history from the training log when
+that log exists. A version still training, or one whose run failed, has no
+report and is left out. Like the other `/v1` routes it requires the API key
+when one is set.
+
+`GET /health` returns `{"status": "ok", "model", "revision"}` for the primary.
+
+### Pages
 
 `GET /` is a playground page: a state box, a questions box, a model picker
 filled from `GET /v1/models`, and each answer's probabilities drawn as bars
@@ -444,6 +595,40 @@ with the confidence beneath. A refused request shows its status, code and
 message, so it is the quickest way to see what a server answers for and how.
 
 ![The playground after a request to a model named large](../assets/playground.png)
+
+`GET /history` lists every retrained version with its verdict and training
+curves, read from `GET /v1/retrain`; see
+[Learn from your own traffic](#learn-from-your-own-traffic).
+
+### Compressed bodies
+
+A POST body may be sent with `Content-Encoding: gzip`; the server inflates it
+before reading it, and a body that does not inflate is 422 `invalid_input`. A
+batch of thousands of rows shrinks several times over, and the Python client
+does this on its own for any body of 64 KB or more.
+
+### Errors
+
+Errors come in the hosted API's shape, `{"error": {"code", "message",
+"param"?}}`, where `code` is stable for programs and `message` is for people:
+
+| Status | `code` | When |
+|---|---|---|
+| 422 | `invalid_input` | a malformed request: `param` names the field, such as a choice over 255 options, a score over 10 levels, or more than 64 questions |
+| 422 | `invalid_options` | a well-formed question the model cannot answer: a choice with one option or more than the model reads, or nothing to ask; `param` is `questions.<id>` |
+| 422 | `unsupported_modality` | the state holds images and the selected model reads only text; `param` is `state` |
+| 422 | `context_too_long` | a request over a token limit; `param` is `questions.<id>` when one question is at fault |
+| 422 | `invalid_input` | without `param`: a request the engine refuses, such as one a remote decision server rejects, or a body sent as `Content-Encoding: gzip` that does not inflate; on the outcome route, `param` is `labels` for a label that does not fit the logged question; on the batch routes, `param` is `rows` for no rows, more than 50,000, or none with labels, and `rows.<i>` for a row an evaluation cannot score |
+| 404 | `unknown_model` | a `model` the server does not answer for; the message lists the names it does |
+| 404 | `unknown_decision` | an outcome for an id the ledger does not hold |
+| 401 | `unauthorized` | an API key is configured and missing or wrong |
+| 429 | `queue_full` | `RULING_MAX_PENDING` requests are already in flight; `Retry-After` says how many seconds to wait |
+| 503 | `upstream_unavailable` | the selected model is served remotely and its host is down, with no failover |
+
+TypeSafe's SDK reads `error.message` from this shape and retries 429 honoring
+`Retry-After`, so both clients and
+[rulesmith](https://github.com/bradAGI/rulesmith), which uses ruling as its
+local judge, behave the same against ruling and the hosted services.
 
 ### TypeSafe's own SDK talks to ruling
 
@@ -472,7 +657,9 @@ loudly if either side drifts.
 
 ## Clients
 
-Python, in this package:
+### Python
+
+In this package:
 
 ```python
 from ruling import Choice, Noul, Score, RulingClient
@@ -494,6 +681,9 @@ if team.confidence < 0.5:
 elif team.choice == "technical" and response.answers["blocked"].noul > 0.9:
     page_on_call()
 ```
+
+The thresholds belong in your code, versioned and tested. Fit them on labeled
+data from your own traffic; see [calibration](measurements.md#running-the-harness).
 
 `RulingClient(api_key=...)` (or `RULING_API_KEY`, the server's own variable)
 talks to a server that requires a key. With a ledger, `response.id` and
@@ -548,6 +738,8 @@ backoff_initial=0.5, backoff_max=5.0)` is the default, waiting the server's
 `RulingClient(retry=RetryPolicy(max_retries=0))` turns retries off. Bodies of
 64 KB or more are sent gzipped; `RulingClient(gzip=False)` sends them plain.
 
+### TypeScript
+
 TypeScript and JavaScript, zero dependencies, in [`sdks/typescript`](../sdks/typescript):
 
 ```js
@@ -555,10 +747,7 @@ import { RulingClient, choice, noul, score } from "ruling";
 const { answers } = await new RulingClient().systemOne({ state, questions: { team: choice("Which team?", { billing: null, technical: null }) } });
 ```
 
-The thresholds belong in your code, versioned and tested. Fit them on labeled
-data from your own traffic; see [calibration](measurements.md#evaluation-and-calibration).
-
-## Evaluation
+## Datasets and reports
 
 ### Datasets
 
@@ -583,7 +772,7 @@ becomes one question named `decision`. `weight` (default 1.0, never negative)
 is the row's share of a training update: a batch's loss is the weighted mean of
 its rows, so weights only matter relative to each other.
 
-### Output
+### Evaluation output
 
 `ruling eval` prints one JSON object. `question_types` holds the per-type
 summaries (accuracy, balanced accuracy, calibration error, Brier, coverage at
@@ -610,24 +799,3 @@ one-hot on the label. Each block is `{"n": 0}` when nothing is in scope, else:
 | `selective` | Keyed `"0.5"`, `"0.7"`, `"0.9"`, `"0.95"`: `coverage` is the share of decisions with top-1 confidence ≥ the threshold, `accuracy` is accuracy over that share, or `null` when it is empty |
 
 The keys and the four thresholds are fixed: other tools read them by name.
-
-### Answer many rows at once
-
-`ruling predict ROWS --output ANSWERS` answers every question of every row in
-any dataset form above, labels ignored, without a server. It writes one JSON
-line per row, in the rows' order: `{"id", "answers"}` with each answer exactly
-as `/v1/systemone` returns it, or `{"id", "error": {"code", "message"}}` with
-the API's code (`context_too_long`, `invalid_options`) for a row the model
-cannot answer, so line *i* is always row *i*. Each line is written as it is
-answered; run the same command again after an interruption and it carries on
-after the last line. It takes the same `--model`, `--adapter`, `--calibration`
-and `--rotations` as `ruling eval`.
-
-Against a running server, [`POST /v1/predict`](#batches-post-v1predict-and-post-v1evaluations)
-answers the same rows with the same per-row entries in one request, and
-`POST /v1/evaluations` scores them; `client.predict(rows)` and
-`client.evaluate(rows)` in the [Python client](#clients) call them.
-
-To turn a strong model's answers into training targets for a small one, use
-`ruling build-corpus answers --questions ROWS --writer MODEL` instead: it keeps
-each answer's full distribution as a soft label.

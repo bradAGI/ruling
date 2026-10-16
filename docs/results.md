@@ -79,11 +79,11 @@ against the 4B's 0.4 s. A yes/no about a full-size photo takes 0.9 s on the
 4B. Fine-tuning the 4B on 84 insect photos lifts a held-out half from 0.886
 to 0.924, at the cost of calibration until a temperature is fitted. Every number,
 with intervals and the paired comparison, is in
-[Measurements](measurements.md#images-glances-fresh-photo-sets).
+[Measurements](measurements.md#glances-fresh-photo-sets).
 
 ## Where Jev leads
 
-The tie in the [README](../README.md)'s chart is real, and so is this. On the same rows Jev is ahead on:
+The tie in the chart above is real, and so is this. On the same rows Jev is ahead on:
 
 - **Every's 154 labeled judgments**, 148 to the 35B's 142 and Clef-flash's
   147. The cleanest accuracy comparison we have, and Jev still wins it, by one
@@ -97,3 +97,7 @@ The tie in the [README](../README.md)'s chart is real, and so is this. On the sa
 - **Knowledge-heavy inputs.** Other replications ([Kev](https://github.com/jaredpalmer/kev),
   [decider](https://github.com/Mapika/decider)) report Jev 10 to 18 points ahead
   on MMLU-style items; we have not run that suite and expect the same.
+
+Everything on this page, with the settings and the command behind each cell,
+is in [Measurements](measurements.md); why the design is what it is, in
+[Design notes](design.md).

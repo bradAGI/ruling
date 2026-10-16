@@ -2,7 +2,8 @@
 
 A LoRA adapter for `mlx-community/Qwen3-4B-Instruct-2507-4bit` that makes the
 probabilities of ruling's letter readout honest without changing what the model
-knows. It is the artifact `ruling train` produces; this page is its model card.
+knows. It is the artifact `ruling train` produces; this page is its model card. The
+walkthrough for training your own is [Fine-tuning](fine-tuning.md).
 
 ## What it is
 
@@ -66,7 +67,7 @@ not used for this adapter: `--label-smoothing`, `--brier-weight` and
 `--ranking-weight`. An adapter trained with all three (0.05, 1.0, 1.0) kept
 accuracy and cut confident errors from 3.3% to 2.8% over the held-out sets, a
 small and uneven gain; see
-[the measurement](measurements.md#tried-calibration-terms-in-the-training-objective).
+[the measurement](measurements.md#calibration-terms-in-the-training-objective).
 
 ## How to use it
 

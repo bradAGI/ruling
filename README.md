@@ -4,7 +4,7 @@
 
 ## ruling: _typed decisions_, not generated text, from open models
 
-**Documentation:** [ruling docs](docs/README.md)
+**Documentation:** [docs/](docs/README.md)
 
 ----
 
@@ -21,12 +21,12 @@ with no training gets 231 right to Jev's 238, not a significant difference
 (exact McNemar, p = 0.21); [the results](docs/results.md) also say where Jev
 is ahead. Not affiliated with TypeSafe AI.
 
-## Documentation: [docs/](docs/README.md)
+## Documentation
 
-**Please go to the [ruling docs](docs/README.md).** The usual starting points:
-[Getting started](docs/getting-started.md),
-[Choosing models](docs/models.md), [Fine-tuning](docs/fine-tuning.md) and the
-[Reference](docs/reference.md) for every setting and API route.
+The usual starting points: [Getting started](docs/getting-started.md),
+[Choosing models](docs/models.md), [Fine-tuning](docs/fine-tuning.md), and the
+[Reference](docs/reference.md) for every setting, command and API route. The
+index is at [docs/README.md](docs/README.md).
 
 ## Installation
 
@@ -38,10 +38,9 @@ ruling serve                  # downloads a 2.3 GB model on first start, then se
 ```
 
 Open `http://127.0.0.1:8010/` for the playground. To work on ruling itself,
-clone the repository and `uv sync`; see
-[Development](docs/development.md). On NVIDIA, see
-[vLLM](docs/reference.md#on-nvidia-vllm). Before relying on an answer, read the
-[limits](docs/getting-started.md#limits).
+clone the repository and `uv sync`; see [Development](docs/development.md).
+On NVIDIA, see [vLLM](docs/reference.md#on-nvidia-vllm). Before relying on an
+answer, read the [limits](docs/getting-started.md#limits).
 
 ## Reading more
 
@@ -49,8 +48,9 @@ clone the repository and `uv sync`; see
   with the command behind every number.
 - [How it works](docs/how-it-works.md): one prefix, many suffixes, and reading
   logits instead of sampling.
-- [Background](docs/background.md): what Jev is, the other open recreations,
-  and the papers behind the calibration.
+- [Design notes](docs/design.md) and [Background](docs/background.md): what Jev
+  is, why ruling is built the way it is, the other open recreations, and the
+  papers behind the calibration.
 
 ## License
 

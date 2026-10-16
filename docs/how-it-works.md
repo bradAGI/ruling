@@ -8,6 +8,8 @@ same answers as JSON took 755 ms and 105 tokens, median of three, and the
 generated object invented a `refund` key inside `team` that no schema asked
 for. Reproduce with `uv run --with pillow python assets/replay.py`.*
 
+Six steps, from a request to its probabilities:
+
 1. **One prefix, many suffixes, one forward pass.** The system prompt and the
    rendered state are pushed through the model once and the KV cache is kept.
    Each question becomes a short suffix (instructions, the options labeled
@@ -48,3 +50,5 @@ the GPU compute-bound; decoding reads the whole model out of memory for each
 token it emits and leaves it memory-bound at about a fortieth of the
 throughput. Regenerate with `uv run --with matplotlib python assets/charts.py`.*
 
+Why a decoder with this readout, rather than a trained head or an encoder, is in
+[Design notes](design.md).

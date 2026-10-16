@@ -3,15 +3,15 @@
 ## Pick the primary model
 
 `RULING_MODEL` is the **primary** model: it answers every question. It is the
-only model you need. A **secondary** model is optional — it answers just the
+only model you need. A **secondary** model is optional: it answers just the
 questions the primary is unsure about, and is set separately with
 `RULING_CASCADE_TO` ([below](#escalate-the-doubtful-questions-to-a-secondary-model)).
 
 | you want as primary | set | notes |
 |---|---|---|
 | the default | nothing | `mlx-community/Qwen3.5-4B-4bit`, 2.3 GB, 3 questions in ~136 ms |
-| the default, reading images too | `RULING_MODEL=vision:mlx-community/Qwen3.5-4B-4bit` | the same weights with their vision tower; needs `uv sync --extra vision` |
-| Jev-level accuracy | `RULING_MODEL=mlx-community/Qwen3.6-35B-A3B-4bit` | 19 GB, ~204 ms, the model in the [README](../README.md)'s chart |
+| the default, reading images too | `RULING_MODEL=vision:mlx-community/Qwen3.5-4B-4bit` | the same weights with their vision tower; needs `pip install 'ruling[vision]'` or `uv sync --extra vision` |
+| Jev-level accuracy | `RULING_MODEL=mlx-community/Qwen3.6-35B-A3B-4bit` | 19 GB, ~204 ms, the model in the [results](results.md) chart; also works as `vision:` |
 | any other MLX checkpoint | `RULING_MODEL=<hub id or local path>` | tested with Qwen, Llama 3.2, Gemma 3 |
 | a model you serve elsewhere | `RULING_MODEL=openai:<name>` + `RULING_OPENAI_BASE_URL` | vLLM, llama.cpp, `mlx_lm.server`, or a commercial API; needs `top_logprobs` |
 | a model on OpenRouter | `RULING_MODEL=openrouter:<name>` | with a spend budget |
@@ -20,14 +20,16 @@ questions the primary is unsure about, and is set separately with
 | the most accurate open decision model we have measured | `RULING_MODEL=typesafe:pplx-decider-v1.1-27b` + `TYPESAFE_BASE_URL=http://127.0.0.1:8092` | Perplexity's pplx-decider, 206 of JevBench's 231 public items; start its MLX port with `assets/bench/serve.sh pplx 8092`. 15.3 GB, prompts up to 8,192 tokens |
 | Jev itself, or any System One server | `RULING_MODEL=typesafe:<alias>` + `TYPESAFE_API_KEY` | `typesafe:jev-latest`; the host's own probabilities pass straight through. Mostly useful as the secondary, below |
 
-Any of these can also be the secondary. The other settings — token limits, API
-key, calibration, logprob caps — are in [docs/reference.md](reference.md#install-and-run).
+Any of these can also be the secondary. Which one to run for which kind of
+input is the last paragraph of [Results](results.md#how-good-is-it). The other
+settings, token limits, API key, calibration and logprob caps, are in the
+[Reference](reference.md#settings).
 
 ## Serve several models from one process
 
-One process can also serve several models by name — a plain base, a tuned
-adapter per decision, a large model for escalation — and adapters on the same
-base share one copy of its weights. Put them in a JSON file and set
+One process can also serve several models by name: a plain base, a tuned
+adapter per decision, a large model for escalation. Adapters on the same base
+share one copy of its weights. Put them in a JSON file and set
 `RULING_MODELS`; requests pick one with `model`, and `GET /v1/models` lists
 them:
 
@@ -41,7 +43,7 @@ RULING_MODELS=models.json uv run ruling serve
 
 An entry can also name a decision server running elsewhere with `base_url`,
 so pplx-decider, Clef-flash and your own tuned model can answer side by side
-under one API. Details in [docs/reference.md](reference.md#serve-several-models).
+under one API. Details in the [Reference](reference.md#serve-several-models).
 
 ## Escalate the doubtful questions to a secondary model
 

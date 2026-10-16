@@ -41,20 +41,19 @@ Three question types: **choice** picks one option, **score** places the state
 on an ordered scale, **noul** judges whether a statement is true, or which of
 two descriptions fits. Ask up to 64 in one request; the state is read once.
 
-There is a playground at `http://127.0.0.1:8010/`, a one-shot CLI (`uv run
-ruling ask --help`), a bulk one for files of rows (`ruling predict`), a Python client (`from ruling import RulingClient`), a
-zero-dependency TypeScript client in [`sdks/typescript`](../sdks/typescript), and
-TypeSafe's own official SDK works against it unchanged — point
-`TYPESAFE_BASE_URL` at the server. Details for all of them are in
-[docs/reference.md](reference.md).
+## The playground
+
+`http://127.0.0.1:8010/` is a page with a state box, a questions box, a model
+picker filled from the server, and each answer's probabilities drawn as bars.
+A refused request shows its status, code and message, so it is the quickest
+way to see what a server answers for and how.
 
 ![The playground: a state, three questions, a model picker, and each answer's probabilities as bars](../assets/playground.png)
 
-On a server started with `RULING_API_KEY`, enter the key in the playground;
-it is kept for the browser tab only. The playground's model picker lists
-every name the server answers to; [serve
-several models](models.md#serve-several-models-from-one-process) to compare them on the
-same state.
+On a server started with `RULING_API_KEY`, enter the key in the playground; it
+is kept for the browser tab only. The model picker lists every name the server
+answers to; [serve several models](models.md#serve-several-models-from-one-process)
+to compare them on the same state.
 
 ## Ask about images
 
@@ -83,9 +82,25 @@ that need both; a server whose default model reads images opens on it.
 The state and its images are read once, however many questions you ask:
 eight 12-megapixel photos and nine questions took 10 s and 7.2 GB on the 4B
 model. Up to 8 images of 5 MB each, PNG, JPEG or WebP. Any vision model behind
-an OpenAI-compatible server reads them too, through `openai:`; see
-[docs/reference.md](reference.md#api). To teach a `vision:` model your own
+an OpenAI-compatible server reads them too, through `openai:`; see the
+[API reference](reference.md#api). To teach a `vision:` model your own
 decisions about images, see [Fine-tune on images](fine-tuning.md#fine-tune-on-images).
+
+## Call it from code
+
+- **Python**, in this package: `from ruling import RulingClient`. Decisions,
+  outcomes, batches of rows, evaluations, usage, image helpers and retries;
+  see [Clients](reference.md#clients).
+- **TypeScript and JavaScript**, zero dependencies, in
+  [`sdks/typescript`](../sdks/typescript).
+- **TypeSafe's own SDK**, unmodified: point `TYPESAFE_BASE_URL` at the
+  server; see [the reference](reference.md#typesafes-own-sdk-talks-to-ruling).
+- **The command line**: `ruling ask` answers once without a server, and
+  `ruling predict` answers a whole file of rows; see
+  [Command line](reference.md#command-line).
+- **Batches over HTTP**: `POST /v1/predict` answers thousands of rows in one
+  request and `POST /v1/evaluations` scores labeled ones; see
+  [the API](reference.md#api).
 
 ## Limits
 
@@ -102,4 +117,4 @@ decisions about images, see [Fine-tune on images](fine-tuning.md#fine-tune-on-im
 - The native engine is MLX, so the fast path is Apple Silicon. On NVIDIA,
   ruling serves through `vllm:` (vLLM's own decision endpoint) or `openai:`
   against a stock vLLM or llama.cpp; see
-  [docs/reference.md](reference.md#on-nvidia-vllm).
+  [On NVIDIA: vLLM](reference.md#on-nvidia-vllm).
