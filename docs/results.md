@@ -73,7 +73,10 @@ is level with Glance's Qwen3-VL-4B on Commons photos and iNaturalist organism
 groups, and behind on insect orders, where the 4B confuses flies with bugs and
 bees. Pooled, 0.915 on 541 yes/no questions and 0.911 on 270 pick-one, to
 Glance's 0.939 and 0.933; the best hosted models in its table reach 0.961 and
-0.937. A yes/no about a full-size photo takes 0.9 s on a Mac. Every number,
+0.937. The 35B as a `vision:` model fixes most of the insect errors and
+pools to 0.930 and 0.933, level with Glance on pick-one, at 0.6 s a decision
+against the 4B's 0.4 s. A yes/no about a full-size photo takes 0.9 s on the
+4B. Every number,
 with intervals and the paired comparison, is in
 [Measurements](measurements.md#images-glances-fresh-photo-sets).
 

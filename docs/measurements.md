@@ -355,7 +355,26 @@ the 9 pick-one errors called a fly a true bug or a bee. The best hosted
 models in Glance's table reach 0.961 on yes/no (Gemini 3.1 Flash-Lite) and
 0.937 on pick-one.
 
-Median latency per decision on one Mac was 374 ms: 916 ms for a yes/no about
+The 35B, `vision:mlx-community/Qwen3.6-35B-A3B-4bit`, run the same way,
+closes most of that gap:
+
+| set | yes/no: 35B | yes/no: 4B | pick-one: 35B | pick-one: 4B |
+|---|---:|---:|---:|---:|
+| Commons | 0.916 | 0.916 | 0.908 | 0.892 |
+| iNaturalist groups | 0.955 | 0.940 | 0.910 | 0.920 |
+| iNaturalist insect orders | 0.914 | 0.890 | 0.971 | 0.914 |
+| pooled | **0.930** [0.907, 0.951] | 0.915 | **0.933** [0.904, 0.963] | 0.911 |
+
+Paired against the 4B, only pick-one on insect orders moves clearly, +5.7
+points [+1.9, +10.5]: the flies are fixed, 9 errors down to 3. Paired against
+Glance on the two sets it publishes per item, the 35B is +0.3 [−1.8, +2.4] on
+yes/no and +1.2 [−1.8, +4.8] on pick-one, level. On insect-order yes/no it
+stays 3 points short of Glance's 0.943, now by saying yes too often (12 of
+114 false statements) where the 4B said no too often. It takes 622 ms per
+decision at the median against the 4B's 374 ms, and 20 GB at peak, within
+ruling's default memory cap.
+
+Median latency per decision for the 4B on one Mac was 374 ms: 916 ms for a yes/no about
 a full-size Commons photo (Glance reports 1.1 s on an M5) and 277 ms on the
 smaller iNaturalist photos (Glance: 0.33 s). Peak memory for the run was
 4.1 GB. The photos stay out of this repository, as Glance keeps them out of
