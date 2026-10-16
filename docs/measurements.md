@@ -408,6 +408,34 @@ set it did not see, as any adapter here does. This split is not Glance's,
 so the 0.886 baseline is not the 0.914 of the comparison above. Training
 records with the photos are not committed.
 
+Fitting that temperature, on the same 105 held-out photos split into two
+stratified halves of 49 and 56 (seed 0): `ruling calibrate` on one half,
+`ruling eval --calibration` on the other, both ways, and the two judged
+halves pooled, so every photo is scored at a temperature fit on photos it
+was not among.
+
+| held-out 105 photos, cross-calibrated | 3 orderings: base | 3 orderings: adapter | 1 ordering: base | 1 ordering: adapter |
+|---|---:|---:|---:|---:|
+| fitted temperatures (half a, half b) | 0.50, 1.12 | 1.77, 2.40 | 0.71, 1.24 | 1.88, 2.46 |
+| accuracy | 0.886 | **0.924** | 0.876 | **0.933** |
+| log loss | 0.408 | **0.325** | 0.467 | **0.331** |
+| ECE | 0.034 | 0.060 | 0.049 | 0.025 |
+| coverage at 5% error | 0.905 | 0.933 | 0.867 | 0.971 |
+| confident errors (wrong at p ≥ 0.9) | 0.019 | 0.019 | 0.029 | 0.038 |
+
+The adapter's two halves agree it is about twice too sharp, and at that
+temperature its log loss falls from 0.474 to 0.325 at three orderings and
+from 0.521 to 0.331 at one, below the base's at either setting. This is
+the comparison `ruling retrain` now makes: at raw log loss the adapter
+would have been refused (0.474 against the base's 0.302); at each
+version's own fitted temperature it is promoted. The base shows the
+other side of a fifty-photo calibration set: its halves disagree on
+whether to sharpen or flatten a model that is already near 1.0, and the
+cross-fit temperatures cost it log loss (0.302 raw, 0.408 fit). A
+temperature is worth fitting when the miscalibration is larger than the
+noise of the set it is fit on, which an adapter's usually is and a base
+model's often is not.
+
 Median latency per decision for the 4B on one Mac was 374 ms: 916 ms for a yes/no about
 a full-size Commons photo (Glance reports 1.1 s on an M5) and 277 ms on the
 smaller iNaturalist photos (Glance: 0.33 s). Peak memory for the run was
