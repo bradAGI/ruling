@@ -161,9 +161,10 @@ An adapter trained here goes across with `ruling export-adapter` (see
 [Training](#training)). A `vllm:` model is any name vLLM lists at its
 `/v1/models`: the base, or an adapter. It can be the primary, a registry
 entry beside local models, or the secondary of a cascade; calibration files
-fit on it with `ruling calibrate` apply as for any other engine. Two limits
-are vLLM's: a choice offers at most 26 options, and a request at most 64
-questions. vLLM also serves Cloudflare's Clef-flash, Clef-omni and Liquid's
+fit on it with `ruling calibrate` apply as for any other engine. vLLM labels
+options A to Z, so a choice wider than 26 runs in two stages, as on an
+`openai:` host: every option is first judged on its own as a yes/no question,
+64 to a request, and the strongest 8 go to a final choice. vLLM also serves Cloudflare's Clef-flash, Clef-omni and Liquid's
 d1 on the same endpoint with their own prompts, so `vllm:Cloudflare/clef-flash`
 is the hosted equivalent of the MLX port used in the measurements.
 

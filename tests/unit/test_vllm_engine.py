@@ -65,14 +65,49 @@ def test_a_calibration_fit_for_the_vllm_model_is_accepted_and_one_for_another_is
         engine_with(lambda r: httpx.Response(200, json=VLLM_RESPONSE), other)
 
 
-def test_a_choice_over_vllms_label_alphabet_is_refused_before_any_request():
+def test_a_choice_wider_than_vllms_alphabet_runs_in_two_stages_of_at_most_64_questions():
+    """vLLM labels options A to Z and takes 64 questions a request, so a 100-way choice is first asked as
+    100 yes/no questions, in two requests, and then as a choice over the strongest few."""
+    requests = []
+
+    def handler(request):
+        body = json.loads(request.content)
+        requests.append(body)
+        answers = {}
+        for qid, question in body["questions"].items():
+            if question["type"] == "noul":
+                # Only option o42 is a confident yes; the rest are all equally unlikely.
+                yes = 0.9 if "o42" in json.dumps(question["instructions"]) else 0.1
+                answers[qid] = {"type": "noul", "noul": yes, "probabilities": {"yes": yes, "no": 1 - yes}, "confidence": 0.8}
+            else:
+                keys = list(question["criteria"])
+                probabilities = {k: 0.0 for k in keys}
+                probabilities[keys[0]] = 1.0
+                answers[qid] = {"type": "choice", "choice": keys[0], "probabilities": probabilities, "confidence": 1.0}
+        return httpx.Response(200, json={"answers": answers, "usage": {"input_tokens": len(body["questions"])}})
+
+    engine = engine_with(handler)
+    wide = {"pick": Choice(instructions="Which one?", criteria={f"o{i}": None for i in range(100)})}
+    scored = engine.score("s", wide)
+    assert engine.max_options == 255 and engine.pass_options == 26
+    stage_one = [r for r in requests if all(q["type"] == "noul" for q in r["questions"].values())]
+    final = [r for r in requests if "pick" in r["questions"]]
+    assert len(stage_one) == 2 and [len(r["questions"]) for r in stage_one] == [64, 36]
+    assert len(final) == 1 and list(final[0]["questions"]["pick"]["criteria"])[0] == "o42"
+    assert len(final[0]["questions"]["pick"]["criteria"]) <= 26
+    probabilities = softmax(scored.raw["pick"].logits)
+    assert scored.raw["pick"].keys[int(np.argmax(probabilities))] == "o42"
+    assert sum(1 for p in probabilities if p > 0) <= 26
+    assert scored.input_tokens == 64 + 36 + 1  # the fake bills one token per question
+
+
+def test_a_choice_over_the_platform_limit_is_still_refused_before_any_request():
     calls = []
     engine = engine_with(lambda r: calls.append(r) or httpx.Response(200, json=VLLM_RESPONSE))
-    wide = {"pick": Choice(instructions="?", criteria={f"o{i}": None for i in range(27)})}
-    with pytest.raises(InvalidOptions, match="2 to 26 options") as caught:
+    wide = {"pick": Choice.model_construct(instructions="?", criteria={f"o{i}": None for i in range(256)})}
+    with pytest.raises(InvalidOptions, match="2 to 255 options") as caught:
         engine.score("s", wide)
-    assert caught.value.question_id == "pick"
-    assert calls == [] and engine.max_options == 26
+    assert caught.value.question_id == "pick" and calls == []
 
 
 @pytest.mark.parametrize("status, text, expected, fragment", [

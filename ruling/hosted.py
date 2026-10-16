@@ -26,7 +26,7 @@ from ruling.calibration import Calibration, Provenance
 from ruling.engine import InputTooLong, RawScore, Scored, TwoStageChoice, answer
 from ruling.prompt import SYSTEM_PROMPT, hosted_user_message, render_question
 from ruling.evals import answer_distribution
-from ruling.questions import (MAX_CHOICE_OPTIONS, Choice, InvalidOptions, Noul, Score, State, SystemOneRequest,
+from ruling.questions import (MAX_CHOICE_OPTIONS, MAX_QUESTIONS, Choice, InvalidOptions, Noul, Score, State, SystemOneRequest,
                               SystemOneResponse, Usage, option_keys)
 
 OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
@@ -305,11 +305,14 @@ class TypeSafeEngine:
         """The exception for a non-200 answer other than the host's context limit."""
         return unavailable_or_error(self.model_id, response)
 
-    def score(self, state: State, questions: dict[str, Choice | Score | Noul]) -> Scored:
+    def _check_width(self, questions: dict[str, Choice | Score | Noul]) -> None:
         for qid, question in questions.items():
             if len(option_keys(question)) > self.max_options:
                 raise InvalidOptions(qid, f"a choice needs 2 to {self.max_options} options on {self.model_id}, "
                                           f"got {len(option_keys(question))}")
+
+    def score(self, state: State, questions: dict[str, Choice | Score | Noul]) -> Scored:
+        self._check_width(questions)
         body = {"state": state, "questions": {qid: q.model_dump(exclude_none=True) for qid, q in questions.items()}}
         if self.remote:
             body["model"] = self.remote
@@ -346,12 +349,14 @@ class TypeSafeEngine:
 
 
 VLLM_PREFIX = "vllm:"
-VLLM_MAX_CHOICE_OPTIONS = 26
-"""vLLM labels a choice's options A to Z in the prompt, so a choice may offer at most 26.
-Its noul and score limits (two sides, ten levels) are within what ruling's own types allow."""
+VLLM_PASS_OPTIONS = 26
+"""vLLM labels a choice's options A to Z in the prompt, so it reads at most 26 in one pass; a wider
+choice runs in two stages. Its noul and score limits (two sides, ten levels) are within ruling's."""
+VLLM_MAX_QUESTIONS = MAX_QUESTIONS
+"""vLLM takes as many questions in one request as the hosted API; a wider stage one is split across requests."""
 
 
-class VllmEngine(TypeSafeEngine):
+class VllmEngine(TwoStageChoice, TypeSafeEngine):
     """A model, or a LoRA adapter by name, behind vLLM's own `/v1/systemone`.
 
     vLLM reads the first reply token's label logprobs the way ruling does, so
@@ -363,10 +368,22 @@ class VllmEngine(TypeSafeEngine):
     failures.
     """
 
-    max_options = VLLM_MAX_CHOICE_OPTIONS
+    pass_options = VLLM_PASS_OPTIONS
     # Whether vLLM's decision endpoint reads images is unverified; refuse rather than send what it may drop.
     reads_images = False
     prefix = VLLM_PREFIX
+
+    def score(self, state: State, questions: dict[str, Choice | Score | Noul]) -> Scored:
+        self._check_width(questions)
+        return TwoStageChoice.score(self, state, questions)
+
+    def _score_plain(self, state: State, questions: dict[str, Choice | Score | Noul]) -> Scored:
+        """One request per `VLLM_MAX_QUESTIONS` questions: the first stage of a wide choice asks one per option."""
+        items = list(questions.items())
+        parts = [TypeSafeEngine.score(self, state, dict(items[start:start + VLLM_MAX_QUESTIONS]))
+                 for start in range(0, len(items), VLLM_MAX_QUESTIONS)]
+        return Scored(raw={qid: raw for part in parts for qid, raw in part.raw.items()},
+                      input_tokens=sum(part.input_tokens for part in parts))
 
     def refusal(self, response: httpx.Response) -> RuntimeError:
         if response.status_code == 400:
