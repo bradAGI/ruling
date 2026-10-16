@@ -6,9 +6,13 @@ a relative link to the version being served (`RULING_ADAPTER=<dir>/current`).
 A run exports the ledger's resolved decisions, drops any whose state is in a
 held-out set, trains the next version (from `current`'s weights when there is
 one), scores both versions on the held-out sets, and repoints `current` only
-when the new one has lower log loss without losing accuracy. Every run leaves
-its records, its training log and the comparison in its version directory,
-promoted or not.
+when the new one has lower log loss without losing accuracy. Each version is
+scored at its own fitted temperature: training sharpens an adapter faster than
+it corrects it, and a version that is right more often must not lose for being
+overconfident. The candidate's temperatures are saved beside its weights, so
+`RULING_CALIBRATION=<dir>/current/calibration.json` serves the promoted
+version calibrated. Every run leaves its records, its training log and the
+comparison in its version directory, promoted or not.
 """
 
 from __future__ import annotations
@@ -21,16 +25,17 @@ from pathlib import Path
 
 import mlx.core as mx
 
-from ruling.calibration import Calibration
+from ruling.calibration import Calibration, Provenance
 from ruling.config import Settings
 from ruling.engine import ADAPTER_CONFIG
-from ruling.evals import Record, collect, decision_blocks, load_dataset
+from ruling.evals import Observation, Record, collect, decision_blocks, fit, load_dataset
 from ruling.ledger import DecisionLedger
 from ruling.registry import build_engine
 from ruling.train import Trainer, TrainConfig, _state_key
 
 CURRENT = "current"
 REPORT = "retrain.json"
+CALIBRATION = "calibration.json"
 DECISIONS = "decisions.jsonl"
 VERSION = re.compile(r"v(\d+)")
 
@@ -43,6 +48,15 @@ def should_promote(current: dict, candidate: dict) -> tuple[bool, str]:
         return False, f"held-out accuracy {candidate['accuracy']:.4f} fell below {current['accuracy']:.4f}"
     return True, (f"held-out log loss {current['nll']:.4f} -> {candidate['nll']:.4f}, "
                   f"accuracy {current['accuracy']:.4f} -> {candidate['accuracy']:.4f}")
+
+
+def score(observations: list[Observation], provenance: Provenance) -> tuple[dict, Calibration]:
+    """Held-out metrics at the temperatures that fit these observations best, and that calibration.
+
+    A temperature never changes which answer wins, so accuracy is the raw model's; log loss
+    becomes a measure of how well the model ranks answers, not of how sharply it states them."""
+    calibration = fit(observations, provenance)
+    return decision_blocks(observations, calibration)["overall"], calibration
 
 
 def next_version(adapters: Path) -> Path:
@@ -90,8 +104,11 @@ def retrain(ledger: DecisionLedger, adapters: Path, model: str, holdout: list[Pa
     served = build_engine(replace(settings, model=model, adapter_path=start, calibration_path=None, cascade_to=None,
                                   failover_to=None))
     candidate = served.variant(version, Calibration())
-    scores = {name: decision_blocks(collect(engine, held_out), Calibration())["overall"]
+    scored = {name: score(collect(engine, held_out), engine.provenance)
               for name, engine in (("current", served), ("candidate", candidate))}
+    scored["candidate"][1].save(version / CALIBRATION)
+    scores = {name: {**metrics, "temperatures": calibration.temperatures}
+              for name, (metrics, calibration) in scored.items()}
     promoted, reason = should_promote(scores["current"], scores["candidate"])
     report = {"version": version.name, "started_from": start.name if start else None, "records": len(records),
               "dropped_held_out": dropped, "holdout": [str(p) for p in holdout], **scores,

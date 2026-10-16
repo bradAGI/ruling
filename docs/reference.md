@@ -251,14 +251,20 @@ has no `id`.
 
 ```bash
 uv run ruling retrain --ledger ledger.sqlite --adapters runs/adapters/tickets --holdout my-holdout.jsonl
-RULING_ADAPTER=runs/adapters/tickets/current uv run ruling serve
+RULING_ADAPTER=runs/adapters/tickets/current \
+RULING_CALIBRATION=runs/adapters/tickets/current/calibration.json uv run ruling serve
 ```
 
 Each run exports the decisions with outcomes, drops any whose state appears in
 a `--holdout` set, and trains the next version (`v1`, `v2`, …) from the
 weights of the one being served. It then scores both on the held-out sets and
 repoints `current` at the new version only if its log loss is lower and its
-accuracy is no worse; restart the server to serve it. Every version
+accuracy is no worse; restart the server to serve it. Each version is scored
+at its own fitted temperature, because training sharpens an adapter faster
+than it corrects it and a version that is right more often must not lose for
+being overconfident. The candidate's temperatures are saved beside its weights
+as `calibration.json`, so `RULING_CALIBRATION=<adapters>/current/calibration.json`
+serves the promoted version calibrated. Every version
 directory keeps its training records, its training log and `retrain.json`,
 the comparison and the reason for the verdict, promoted or not. Until
 `--min-records` decisions (100 by default) have outcomes, a run does nothing.

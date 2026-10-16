@@ -2,16 +2,19 @@
 promotes a new adapter only when it beats the served one on held-out data."""
 
 import json
+from dataclasses import replace
 
 import pytest
 from fastapi.testclient import TestClient
 
 from ruling import states
 from ruling.build import write
+from ruling.calibration import Calibration
 from ruling.cli import main
+from ruling.config import Settings
 from ruling.ledger import DecisionLedger
-from ruling.registry import Registry
-from ruling.retrain import CURRENT, REPORT, should_promote
+from ruling.registry import Registry, build_engine
+from ruling.retrain import CALIBRATION, CURRENT, REPORT, should_promote
 from ruling.server import create_app
 
 from .conftest import TEST_MODEL
@@ -49,3 +52,11 @@ def test_served_outcomes_train_a_version_that_is_promoted_only_if_better(engine,
         assert report["promoted"] == should_promote(report["current"], report["candidate"])[0]
         now = (adapters / CURRENT).resolve().name if (adapters / CURRENT).exists() else None
         assert now == (version if report["promoted"] else before)
+        # Both versions were judged at their own fitted temperatures, and the candidate's ship with it:
+        # a server started on this version with its calibration accepts the pairing.
+        calibration = Calibration.load(adapters / version / CALIBRATION)
+        assert calibration.temperatures == report["candidate"]["temperatures"] and calibration.temperatures
+        assert report["current"]["temperatures"]
+        serving = build_engine(replace(Settings.from_env(), model=TEST_MODEL, adapter_path=adapters / version,
+                                       calibration_path=adapters / version / CALIBRATION))
+        assert serving.calibration.temperatures == calibration.temperatures

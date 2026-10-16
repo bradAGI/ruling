@@ -110,12 +110,15 @@ with `exclude_from_training`); post what turned out to be right to
 
 ```bash
 uv run ruling retrain --ledger ledger.sqlite --adapters runs/adapters/tickets --holdout my-holdout.jsonl
-RULING_ADAPTER=runs/adapters/tickets/current uv run ruling serve
+RULING_ADAPTER=runs/adapters/tickets/current \
+RULING_CALIBRATION=runs/adapters/tickets/current/calibration.json uv run ruling serve
 ```
 
 Each run trains a new version on the resolved decisions, starting from the one
 being served, and promotes it to `current` only if it beats that one on your
-holdout: lower log loss, no lost accuracy. The server's `/history` page,
+holdout: lower log loss at each version's own fitted temperature, no lost
+accuracy. The new version's temperatures are saved beside its weights, so the
+promoted adapter is served calibrated. The server's `/history` page,
 linked from the playground, lists every run: the held-out scores of both
 versions, and why each was or was not promoted. See
 [Learn from your own traffic](reference.md#learn-from-your-own-traffic). A
