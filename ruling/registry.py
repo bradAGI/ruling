@@ -167,6 +167,7 @@ class Registry:
             revision=engine.revision, adapter=engine.adapter, calibration=dict(engine.calibration.temperatures),
             max_input_tokens=engine.max_input_tokens, max_branch_tokens=engine.max_branch_tokens,
             max_options=engine.max_options, rotations=engine.rotations, prior_debias=engine.prior_debias,
+            modalities=["text", "image"] if engine.reads_images else ["text"],
         ) for name, engine in self.engines.items()]
 
 

@@ -49,7 +49,10 @@ from ruling.questions import (
     Score,
     State,
     SystemOneRequest,
+    UnsupportedModality,
     check_askable,
+    check_images,
+    check_readable,
     option_keys,
 )
 
@@ -86,6 +89,7 @@ class Record(BaseModel):
     @model_validator(mode="after")
     def labels_and_references_match_questions(self) -> "Record":
         check_askable(self.questions, MAX_CHOICE_OPTIONS)
+        check_images(self.state)
         unknown = (set(self.labels) | set(self.references)) - set(self.questions)
         if unknown:
             raise ValueError(f"labels or references for unknown questions {sorted(unknown)}")
@@ -439,12 +443,15 @@ def predict(engine, records: list[Record]) -> Iterator[dict]:
         line = {"id": record.id} if record.id is not None else {}
         try:
             check_askable(record.questions, engine.max_options)
+            check_readable(record.state, engine.reads_images)
             response = engine.evaluate(SystemOneRequest(state=record.state, questions=record.questions))
             line["answers"] = {qid: a.model_dump(mode="json") for qid, a in response.answers.items()}
         except InputTooLong as exc:
             line["error"] = {"code": "context_too_long", "message": str(exc)}
         except InvalidOptions as exc:
             line["error"] = {"code": "invalid_options", "message": str(exc)}
+        except UnsupportedModality as exc:
+            line["error"] = {"code": "unsupported_modality", "message": str(exc)}
         yield line
 
 

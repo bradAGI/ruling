@@ -253,7 +253,26 @@ A request carries 1 to 64 questions; a choice has 2 to 255 options and a score
 true or false looks like in its criteria instead, with or without instructions.
 
 Instructions, option descriptions, and levels may be strings or JSON
-structure. Answers come back keyed by the same ids:
+structure.
+
+**Images.** Put `{"type": "image", "media_type": "image/png", "data":
+"<base64>"}` anywhere in the state, the shape Endor uses: PNG, JPEG or WebP, at
+most 8 per decision and 5 MB each. The model sees the state with each image
+replaced by `<image 1>`, `<image 2>`, … in document order, and the images
+themselves under those names, so a question can say "the receipt in
+`<image 1>`". `openai:` models get them as image content parts, so any
+vision model behind vLLM, SGLang or `mlx_vlm.server` reads them; a
+`typesafe:` model forwards the state unchanged. A model that reads only text
+answers 422 `unsupported_modality`, and `GET /v1/models` lists each model's
+`modalities`.
+
+```bash
+uv run python -m mlx_vlm.server --model mlx-community/Qwen3.5-4B-4bit --port 8080 --top-logprobs-k 20
+RULING_MODEL=openai:mlx-community/Qwen3.5-4B-4bit RULING_OPENAI_BASE_URL=http://127.0.0.1:8080/v1 \
+  RULING_OPENAI_EXTRA_BODY='{"chat_template_kwargs": {"enable_thinking": false}}' uv run ruling serve
+```
+
+Answers come back keyed by the same ids:
 
 | Type | Fields |
 |---|---|
@@ -280,6 +299,7 @@ Errors come in the hosted API's shape, `{"error": {"code", "message",
 |---|---|---|
 | 422 | `invalid_input` | a malformed request: `param` names the field, such as a choice over 255 options, a score over 10 levels, or more than 64 questions |
 | 422 | `invalid_options` | a well-formed question the model cannot answer: a choice with one option or more than the model reads, or nothing to ask; `param` is `questions.<id>` |
+| 422 | `unsupported_modality` | the state holds images and the selected model reads only text; `param` is `state` |
 | 422 | `context_too_long` | a request over a token limit; `param` is `questions.<id>` when one question is at fault |
 | 422 | `invalid_input` | without `param`: a request the engine refuses, such as one a remote decision server rejects; on the outcome route, `param` is `labels` for a label that does not fit the logged question |
 | 404 | `unknown_model` | a `model` the server does not answer for; the message lists the names it does |

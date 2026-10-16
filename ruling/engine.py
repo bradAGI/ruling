@@ -259,6 +259,7 @@ class Engine(TwoStageChoice):
             self._pad_id = self.tokenizer.eos_token_id
         self._system_role = self._template_accepts_system_role()
         self.max_options = MAX_CHOICE_OPTIONS
+        self.reads_images = False
         self._shared = _SharedModel()
         self._shared.lora = json.loads((adapter / ADAPTER_CONFIG).read_text()) if adapter else None
         self._shared.active = self

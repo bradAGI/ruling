@@ -18,7 +18,15 @@ from ruling.config import Settings
 from ruling.engine import InputTooLong
 from ruling.hosted import HostUnavailable
 from ruling.ledger import DecisionLedger, Outcome, UnknownDecision
-from ruling.questions import InvalidOptions, ModelList, SystemOneRequest, SystemOneResponse, check_askable
+from ruling.questions import (
+    InvalidOptions,
+    ModelList,
+    SystemOneRequest,
+    SystemOneResponse,
+    UnsupportedModality,
+    check_askable,
+    check_readable,
+)
 from ruling.registry import Registry, UnknownModel
 
 log = logging.getLogger("ruling")
@@ -111,6 +119,10 @@ def create_app(registry: Registry, api_key: str | None, max_pending: int,
             check_askable(request.questions, engine.max_options)
         except InvalidOptions as exc:
             raise ApiError(422, "invalid_options", str(exc), f"questions.{exc.question_id}") from exc
+        try:
+            check_readable(request.state, engine.reads_images)
+        except UnsupportedModality as exc:
+            raise ApiError(422, "unsupported_modality", f"{name}: {exc}", "state") from exc
         if not admission.enter():
             raise ApiError(429, "queue_full", f"{admission.limit} requests are already in flight",
                            retry_after=admission.retry_after())

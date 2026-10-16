@@ -23,6 +23,7 @@ PAYLOAD = {"state": "The invoice was paid twice.",
 class FakeEngine:
     prior_debias = False
     max_options = 255
+    reads_images = False
     rotations = 1
     max_input_tokens = max_branch_tokens = 1000
     revision = adapter = None
@@ -171,3 +172,28 @@ def test_a_full_queue_turns_the_next_request_away_with_retry_after():
     assert statuses[2].status_code == 429
     assert statuses[2].json()["error"]["code"] == "queue_full" and statuses[2].headers["retry-after"] == "1"
     assert statuses[0].status_code == 200 and statuses[1].status_code == 200
+
+
+PHOTO = {"type": "image", "media_type": "image/png", "data": "iVBORw0KGgo="}
+
+
+def test_images_reach_only_a_model_that_reads_them():
+    sighted = FakeEngine("vision")
+    sighted.reads_images = True
+    request = {**PAYLOAD, "state": {"photo": PHOTO, "note": "Is it red?"}}
+    with TestClient(app_with({"m": FakeEngine("m"), "vision": sighted}, "m")) as client:
+        refused = client.post("/v1/systemone", json=request)
+        answered = client.post("/v1/systemone", json={**request, "model": "vision"})
+        listed = {m["name"]: m["modalities"] for m in client.get("/v1/models").json()["models"]}
+    assert refused.status_code == 422
+    assert refused.json()["error"]["code"] == "unsupported_modality" and refused.json()["error"]["param"] == "state"
+    assert answered.status_code == 200
+    assert listed == {"m": ["text"], "vision": ["text", "image"]}
+
+
+def test_a_malformed_image_is_invalid_input_on_the_state():
+    request = {**PAYLOAD, "state": {"photo": {**PHOTO, "media_type": "image/gif"}}}
+    with TestClient(app_with({"m": FakeEngine("m")}, "m")) as client:
+        response = client.post("/v1/systemone", json=request)
+    assert response.status_code == 422
+    assert response.json()["error"]["code"] == "invalid_input" and response.json()["error"]["param"].startswith("state")

@@ -32,6 +32,7 @@ class ThinkingEngine:
         self.rotations = 1
         self.prior_debias = False
         self.max_options = engine.codes.max_options
+        self.reads_images = engine.reads_images
         self.max_input_tokens = engine.max_input_tokens
         self.calibration = engine.calibration
 

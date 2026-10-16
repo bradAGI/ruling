@@ -144,6 +144,8 @@ class HostedEngine(TwoStageChoice):
         self.extra_body = extra_body or {}
         self.pass_options = self.top_logprobs
         self.max_options = MAX_CHOICE_OPTIONS
+        # Images go to the host as content parts; a host whose model reads only text refuses them itself.
+        self.reads_images = True
         self.concurrency = concurrency
         # A hosted model's context is the host's business; ruling does not re-impose one.
         self.max_input_tokens = 1_000_000
@@ -276,6 +278,8 @@ class TypeSafeEngine:
 
     prior_debias = False
     max_options = MAX_CHOICE_OPTIONS
+    # The state goes to the service unchanged, images included; the service decides what it reads.
+    reads_images = True
     prefix = TYPESAFE_PREFIX
     rotations = 1
     """The host orders options as it sees fit; ruling does not re-ask it."""
@@ -360,6 +364,8 @@ class VllmEngine(TypeSafeEngine):
     """
 
     max_options = VLLM_MAX_CHOICE_OPTIONS
+    # Whether vLLM's decision endpoint reads images is unverified; refuse rather than send what it may drop.
+    reads_images = False
     prefix = VLLM_PREFIX
 
     def refusal(self, response: httpx.Response) -> RuntimeError:

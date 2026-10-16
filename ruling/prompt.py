@@ -10,7 +10,17 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 
-from ruling.questions import Choice, Noul, Score, State, question_statement, render_text
+from ruling.questions import (
+    IMAGE_REFERENCE,
+    Choice,
+    Noul,
+    Score,
+    State,
+    question_statement,
+    render_text,
+    state_images,
+    without_images,
+)
 
 SYSTEM_PROMPT = (
     "You are a decision engine embedded in software. You are shown a state and one "
@@ -41,6 +51,9 @@ class RenderedQuestion:
 
 
 def render_state(state: State) -> str:
+    """The state as prompt text, each image as a reference such as `<image 1>`; an engine that reads
+    images supplies them beside the text."""
+    state = without_images(state)
     body = state if isinstance(state, str) else json.dumps(state, indent=2, ensure_ascii=False)
     return f"State:\n{body}\n\n"
 
@@ -84,7 +97,7 @@ def render_question(question: Choice | Score | Noul, codes: list[str], rotation:
     return RenderedQuestion(text=text, keys=keys, codes=used, question=question, options=options, closing=closing)
 
 
-def hosted_user_message(state: State, rendered: RenderedQuestion) -> str:
+def hosted_user_message(state: State, rendered: RenderedQuestion) -> str | list[dict]:
     """The user turn for an OpenAI-compatible host: question and options first,
     the state after them, the answer cue last.
 
@@ -95,8 +108,19 @@ def hosted_user_message(state: State, rendered: RenderedQuestion) -> str:
     on a CPU host at 36 tokens a second, 18 s against 1 s. The local engine
     keeps the state first, since it encodes the state once and scores every
     question against it.
+
+    A state with images becomes content parts, each image after the state text.
     """
-    return f"{rendered.question}\n{rendered.options}\n\n{render_state(state)}{rendered.closing}"
+    text = f"{rendered.question}\n{rendered.options}\n\n{render_state(state)}"
+    images = state_images(state)
+    if not images:
+        return text + rendered.closing
+    # Each image follows the state under the reference the state text uses for it.
+    parts = [{"type": "text", "text": text}]
+    for number, image in enumerate(images, 1):
+        parts += [{"type": "text", "text": f"{IMAGE_REFERENCE.format(number)}:"},
+                  {"type": "image_url", "image_url": {"url": image.data_url()}}]
+    return parts + [{"type": "text", "text": "\n\n" + rendered.closing}]
 
 
 def prior_question(cardinality: int) -> Choice:

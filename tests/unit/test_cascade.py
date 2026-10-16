@@ -14,6 +14,7 @@ class FakeEngine:
 
     prior_debias = False
     max_options = 255
+    reads_images = False
 
     def __init__(self, model_id, logits, temperature=1.0, tokens=10):
         self.model_id, self.logits, self.tokens = model_id, logits, tokens

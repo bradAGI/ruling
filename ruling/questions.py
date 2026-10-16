@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import base64
+import binascii
 import json
 from typing import Annotated, Any, Literal, Union
 
@@ -19,6 +21,12 @@ Text = Union[str, dict[str, Any], list[Any]]
 MAX_CHOICE_OPTIONS = 255
 MAX_SCORE_LEVELS = 10
 MAX_QUESTIONS = 64
+
+# Endor's image limits: an image is {"type": "image", "media_type", "data": <base64>}
+# anywhere in the state, PNG, JPEG or WebP, at most 8 per decision and 5 MB each.
+MAX_IMAGES = 8
+MAX_IMAGE_BYTES = 5 * 2**20
+IMAGE_REFERENCE = "<image {}>"
 
 # The hosted SDK sends its default model name on every request. Treating these as
 # "whichever model this server loaded" is what lets that client talk to ruling
@@ -100,6 +108,63 @@ def question_statement(question: Question) -> str:
     return render_text(question.instructions) if has_text(question.instructions) else DESCRIBED_NOUL
 
 
+class Image(Strict):
+    type: Literal["image"]
+    media_type: Literal["image/png", "image/jpeg", "image/webp"]
+    data: str
+
+    @field_validator("data")
+    @classmethod
+    def decodes_within_the_limit(cls, data: str) -> str:
+        try:
+            size = len(base64.b64decode(data, validate=True))
+        except binascii.Error as exc:
+            raise ValueError(f"image data must be base64: {exc}") from exc
+        if size > MAX_IMAGE_BYTES:
+            raise ValueError(f"an image may be at most {MAX_IMAGE_BYTES // 2**20} MB, got {size / 2**20:.1f} MB")
+        return data
+
+    def data_url(self) -> str:
+        return f"data:{self.media_type};base64,{self.data}"
+
+
+def _is_image(value: Any) -> bool:
+    return isinstance(value, dict) and value.get("type") == "image"
+
+
+def state_images(state: State) -> list[Image]:
+    """Every image in the state, depth first in document order, each validated."""
+    if _is_image(state):
+        return [Image.model_validate(state)]
+    children = state.values() if isinstance(state, dict) else state if isinstance(state, list) else ()
+    return [image for child in children for image in state_images(child)]
+
+
+def without_images(state: State) -> State:
+    """The state with each image replaced by its reference, `<image 1>` and on, in `state_images` order."""
+    counter = iter(range(1, MAX_IMAGES + 1))
+
+    def replace(value: Any) -> Any:
+        if _is_image(value):
+            return IMAGE_REFERENCE.format(next(counter))
+        if isinstance(value, dict):
+            return {key: replace(child) for key, child in value.items()}
+        if isinstance(value, list):
+            return [replace(child) for child in value]
+        return value
+
+    return replace(state)
+
+
+class UnsupportedModality(ValueError):
+    """A state holds images and the model that would answer reads only text."""
+
+
+def check_readable(state: State, reads_images: bool) -> None:
+    if not reads_images and state_images(state):
+        raise UnsupportedModality("this model reads only text; the state holds images")
+
+
 class InvalidOptions(ValueError):
     """A well-formed question the model cannot answer, named so the error can point at it."""
 
@@ -125,11 +190,24 @@ class SystemOneRequest(BaseModel):
     # Endor's name for traffic that must never become training data, such as benchmarks and evaluations.
     exclude_from_training: bool = False
 
+    @field_validator("state")
+    @classmethod
+    def images_are_valid(cls, state: State) -> State:
+        return check_images(state)
+
     @model_validator(mode="after")
     def ids_are_non_empty(self) -> "SystemOneRequest":
         if any(not qid for qid in self.questions):
             raise ValueError("question ids must be non-empty")
         return self
+
+
+def check_images(state: State) -> State:
+    """Validate every image in the state and their count; returns the state unchanged."""
+    images = state_images(state)
+    if len(images) > MAX_IMAGES:
+        raise ValueError(f"a state may hold at most {MAX_IMAGES} images, got {len(images)}")
+    return state
 
 
 class ChoiceAnswer(BaseModel):
@@ -186,6 +264,7 @@ class ModelInfo(BaseModel):
     max_options: int
     rotations: int
     prior_debias: bool
+    modalities: list[Literal["text", "image"]]
 
 
 class ModelList(BaseModel):

@@ -11,6 +11,7 @@ from ruling.questions import SystemOneResponse, Usage
 class TooLongPast:
     """Answers every state no longer than `limit` characters, as an engine with a context limit does."""
     max_options = 3
+    reads_images = False
 
     def __init__(self, limit: int):
         self.limit = limit
@@ -36,3 +37,11 @@ def test_every_row_gets_one_line_in_its_own_place():
     assert [line["id"] for line in lines] == [r.id for r in records]
     assert [line["error"]["code"] if "error" in line else line["answers"]["q"]["type"] for line in lines] == \
         ["noul", "context_too_long", "invalid_options", "noul"]
+
+
+def test_a_row_with_images_for_a_text_model_keeps_its_place():
+    photo = {"type": "image", "media_type": "image/png", "data": "iVBORw0KGgo="}
+    records = [Record(state={"photo": photo}, questions={"q": {"type": "noul", "instructions": "Red?"}}),
+               _record("fine", type="noul")]
+    lines = list(predict(TooLongPast(limit=5), records))
+    assert lines[0]["error"]["code"] == "unsupported_modality" and lines[1]["answers"]["q"]["type"] == "noul"

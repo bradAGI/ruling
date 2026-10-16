@@ -24,9 +24,15 @@ Source = "https://github.com/bradAGI/ruling"
 [project.scripts]
 ruling = "ruling.cli:main"
 
+[project.optional-dependencies]
+vision = [
+    "mlx-vlm>=0.7.8",
+]
+
 [dependency-groups]
 dev = [
     "endor>=0.6.1",
+    "mlx-vlm>=0.7.8",
     "peft>=0.21.2",
     "pytest>=8",
     "pytest-timeout>=2.4.0",
