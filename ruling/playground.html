@@ -28,6 +28,7 @@
   .thumb img { display: block; width: 96px; height: 72px; object-fit: cover; border: 1px solid var(--line); border-radius: 4px; }
   .thumb button { position: absolute; top: 2px; right: 2px; padding: 0 5px; font-size: 12px; line-height: 16px; }
   input[type=file] { font: inherit; font-size: 12px; margin-top: 8px; max-width: 100%; }
+  button.small { grid-column: auto; padding: 2px 8px; font-size: 12px; background: transparent; color: inherit; border-color: var(--line); }
   @media (max-width: 700px) { main { grid-template-columns: 1fr; } }
 </style>
 </head>
@@ -39,6 +40,7 @@
     <textarea id="state">{"message": "My card was charged twice for one order. Refund the duplicate."}</textarea>
     <label for="images">images, added to the state as <code>images</code>; ask about them as &lt;image 1&gt;, &lt;image 2&gt;, …</label>
     <input type="file" id="images" accept="image/png,image/jpeg,image/webp" multiple>
+    <button type="button" id="image-example" class="small">image example</button>
     <div id="images-note" class="meta"></div>
     <div id="thumbs"></div>
   </div>
@@ -76,6 +78,8 @@ fetch("/v1/models").then(r => r.json()).then(data => {
     model.appendChild(option);
   }
   showModalities();
+  // A server whose default model reads images opens on an example that uses one.
+  if ((modalities[model.value] || []).includes("image")) loadImageExample();
 }).catch(e => { out.innerHTML = `<div class="err">could not list models: ${e.message}</div>`; });
 function parseState(text) { try { return JSON.parse(text); } catch { return text; } }
 function countImages(value) {
@@ -106,8 +110,41 @@ function showThumbs() {
 function showModalities() {
   const sees = (modalities[model.value] || []).includes("image");
   picker.disabled = !sees;
+  document.getElementById("image-example").disabled = !sees;
   document.getElementById("images-note").textContent = sees ? "" : "this model reads text only; serve a vision: model to ask about images";
 }
+// An example to try with a model that reads images: a receipt drawn here, so the page ships no image file.
+const IMAGE_STATE = {"note": "The customer says order 4471 was charged twice and attached the receipt."};
+const IMAGE_QUESTIONS = {
+  "kind": {"type": "choice", "instructions": "What is <image 1>?",
+           "criteria": {"receipt": "A store or restaurant receipt", "photo": "A photo of a person or a place",
+                        "screenshot": "A screenshot of an app"}},
+  "same_order": {"type": "noul", "instructions": "The order number on <image 1> is the one in the note."},
+  "total": {"type": "score", "instructions": "How large is the total on <image 1>?",
+            "criteria": ["Under $10", "$10 to $100", "Over $100"]}
+};
+function drawReceipt() {
+  const canvas = document.createElement("canvas");
+  canvas.width = 360; canvas.height = 480;
+  const g = canvas.getContext("2d");
+  g.fillStyle = "#fffdf6"; g.fillRect(0, 0, canvas.width, canvas.height);
+  g.fillStyle = "#222"; g.textBaseline = "top";
+  const lines = [["bold 26px sans-serif", "CORNER CAFE"], ["16px monospace", "12 Market St, Springfield"], ["16px monospace", ""],
+                 ["18px monospace", "Order #4471"], ["16px monospace", ""], ["18px monospace", "2 x Latte          9.00"],
+                 ["18px monospace", "1 x Bagel          4.50"], ["18px monospace", "1 x Fruit bowl     6.25"],
+                 ["18px monospace", "Tip                2.35"], ["16px monospace", ""], ["bold 22px monospace", "TOTAL  $22.10"],
+                 ["16px monospace", ""], ["18px monospace", "PAID  VISA ****1881"], ["16px monospace", "Thank you!"]];
+  let y = 24;
+  for (const [font, text] of lines) { g.font = font; g.fillText(text, 28, y); y += 30; }
+  return { media_type: "image/png", data: canvas.toDataURL("image/png").split(",", 2)[1] };
+}
+function loadImageExample() {
+  stateBox.value = JSON.stringify(IMAGE_STATE, null, 2);
+  document.getElementById("questions").value = JSON.stringify(IMAGE_QUESTIONS, null, 2);
+  picked = [drawReceipt()];
+  showThumbs();
+}
+document.getElementById("image-example").onclick = loadImageExample;
 model.onchange = showModalities;
 stateBox.oninput = showThumbs;
 picker.onchange = async () => {

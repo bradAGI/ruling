@@ -23,10 +23,22 @@ COLOR = {"color": {"type": "choice", "instructions": "What color is the square i
 
 
 @pytest.fixture(scope="module")
-def served(engine):
-    vision = VisionEngine(VISION_PREFIX + TEST_MODEL, Calibration(), max_input_tokens=8192, rotations=3,
-                          prior_debias=False, max_image_tokens=256)
+def vision():
+    return VisionEngine(VISION_PREFIX + TEST_MODEL, Calibration(), max_input_tokens=8192, rotations=3,
+                        prior_debias=False, max_image_tokens=256)
+
+
+@pytest.fixture(scope="module")
+def served(engine, vision):
     server, thread, url = _serve(create_app(Registry("text", {"text": engine, "vision": vision}), None, 4))
+    yield url
+    server.should_exit = True
+    thread.join(timeout=10)
+
+
+@pytest.fixture(scope="module")
+def served_vision(vision):
+    server, thread, url = _serve(create_app(Registry.single(vision), None, 4))
     yield url
     server.should_exit = True
     thread.join(timeout=10)
@@ -51,9 +63,20 @@ def test_a_picked_image_reaches_the_model_and_decides_the_answer(page: Page, ser
 def test_a_text_model_cannot_be_sent_images_from_the_page(page: Page, served):
     page.goto(served)
     page.select_option("#model", "text")
-    assert page.is_disabled("#images")
+    assert page.is_disabled("#images") and page.is_disabled("#image-example")
     page.select_option("#model", "vision")
-    assert page.is_enabled("#images")
+    assert page.is_enabled("#images") and page.is_enabled("#image-example")
+
+
+def test_a_server_whose_default_model_sees_opens_on_an_image_example_it_answers(page: Page, served_vision):
+    page.goto(served_vision)
+    page.wait_for_selector(".thumb")
+    with page.expect_response("**/v1/systemone") as answered:
+        page.click("#run")
+    assert len(json.loads(answered.value.request.post_data)["state"]["images"]) == 1
+    answers = answered.value.json()["answers"]
+    assert answers["kind"]["choice"] == "receipt" and answers["same_order"]["noul"] > 0.5
+    assert max(answers["total"]["probabilities"], key=answers["total"]["probabilities"].get) == "1"
 
 
 def test_the_history_page_shows_every_finished_run_and_the_one_being_served(page: Page, tmp_path):

@@ -72,7 +72,9 @@ curl -s localhost:8010/v1/systemone -H 'content-type: application/json' -d '{
 
 In the playground, pick image files under the state box; they are added to
 the state as `images` and shown with the `<image N>` name to ask about them
-by. The picker is off for a model that reads text only.
+by. The picker is off for a model that reads text only. **image example**
+loads a support note with a receipt drawn in the page and three questions
+that need both; a server whose default model reads images opens on it.
 
 The state and its images are read once, however many questions you ask:
 eight 12-megapixel photos and nine questions took 10 s and 7.2 GB on the 4B
