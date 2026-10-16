@@ -193,5 +193,6 @@ def create_app(registry: Registry, api_key: str | None, max_pending: int,
 
 def app_from_env() -> FastAPI:
     settings = Settings.from_env()
-    ledger = DecisionLedger(settings.ledger_path) if settings.ledger_path else None
+    retain = settings.ledger_retain_days * 86_400 if settings.ledger_retain_days is not None else None
+    ledger = DecisionLedger(settings.ledger_path, retain) if settings.ledger_path else None
     return create_app(Registry.from_settings(settings), settings.api_key, settings.max_pending, ledger)

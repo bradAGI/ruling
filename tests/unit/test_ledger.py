@@ -40,3 +40,23 @@ def test_an_outcome_must_name_a_decision_and_fit_its_question(tmp_path):
     with pytest.raises(ValueError):
         ledger.outcome(decision, {"urgency": 2})
     assert list(ledger.records()) == []
+
+
+def test_unresolved_decisions_older_than_the_retention_are_dropped_on_the_next_record(tmp_path):
+    path = tmp_path / "ledger.sqlite"
+    clock = {"now": 1_000_000.0}
+    ledger = DecisionLedger(path, retain_seconds=3600, now=lambda: clock["now"])
+    resolved, stale = ledger.record(REQUEST, RESPONSE), ledger.record(REQUEST, RESPONSE)
+    ledger.outcome(resolved, {"team": "billing"})
+    clock["now"] += 3601
+    fresh = ledger.record(REQUEST, RESPONSE)          # this write is what prunes
+    assert ledger.ids() == [resolved, fresh]
+    with pytest.raises(UnknownDecision):
+        ledger.outcome(stale, {"team": "billing"})
+    # Resolved decisions are training data and are kept however old; without a retention nothing is pruned.
+    clock["now"] += 10 * 3600
+    later = ledger.record(REQUEST, RESPONSE)
+    assert ledger.ids() == [resolved, later]
+    forever = DecisionLedger(path, now=lambda: clock["now"] + 10 * 3600)
+    kept = forever.record(REQUEST, RESPONSE)
+    assert forever.ids() == [resolved, later, kept]

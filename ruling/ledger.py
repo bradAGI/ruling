@@ -6,7 +6,9 @@ with outcomes are training records, so a model can be retrained on its own
 traffic with `ruling export-decisions` and `ruling train`.
 
 SQLite keeps the ledger on disk and indexed, so lookups and memory stay flat
-however much traffic it holds.
+however much traffic it holds. A retention bounds the disk: a decision nobody
+reports an outcome for within it is dropped, state and all, the next time a
+decision is recorded; a decision with an outcome is training data and stays.
 """
 
 from __future__ import annotations
@@ -16,7 +18,7 @@ import sqlite3
 import threading
 import time
 import uuid
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from pathlib import Path
 
 from pydantic import BaseModel, Field
@@ -32,6 +34,7 @@ CREATE TABLE IF NOT EXISTS decisions (
     request TEXT NOT NULL,
     response TEXT NOT NULL
 );
+CREATE INDEX IF NOT EXISTS decisions_created ON decisions(created);
 CREATE TABLE IF NOT EXISTS outcomes (
     decision TEXT NOT NULL REFERENCES decisions(id),
     question TEXT NOT NULL,
@@ -54,20 +57,34 @@ class UnknownDecision(KeyError):
 
 
 class DecisionLedger:
-    def __init__(self, path: Path):
+    def __init__(self, path: Path, retain_seconds: float | None = None, now: Callable[[], float] = time.time):
         # Server requests arrive on a thread pool; one connection behind a lock serves them all.
         self._db = sqlite3.connect(path, check_same_thread=False)
         self._db.executescript(SCHEMA)
         self._lock = threading.Lock()
+        self._retain = retain_seconds
+        self._now = now
 
     def record(self, request: SystemOneRequest, response: SystemOneResponse) -> str:
-        """Store one answered request and return the id outcomes will refer to."""
+        """Store one answered request and return the id outcomes will refer to.
+
+        With a retention, unresolved decisions older than it go first, so the ledger never
+        outgrows the traffic of one retention period plus what has been resolved."""
         decision = uuid.uuid4().hex
+        now = self._now()
         with self._lock, self._db:
+            if self._retain is not None:
+                self._db.execute("DELETE FROM decisions WHERE created < ? AND id NOT IN (SELECT decision FROM outcomes)",
+                                 (now - self._retain,))
             self._db.execute("INSERT INTO decisions VALUES (?, ?, ?, ?, ?)",
-                             (decision, time.time(), response.model, request.model_dump_json(exclude_none=True),
+                             (decision, now, response.model, request.model_dump_json(exclude_none=True),
                               response.model_dump_json(exclude_none=True)))
         return decision
+
+    def ids(self) -> list[str]:
+        """Every decision still held, oldest first."""
+        with self._lock:
+            return [row[0] for row in self._db.execute("SELECT id FROM decisions ORDER BY created, rowid")]
 
     def outcome(self, decision: str, labels: dict) -> Record:
         """Attach outcomes to a decision; a later outcome for the same question replaces the earlier one.
@@ -81,7 +98,7 @@ class DecisionLedger:
                 raise UnknownDecision(decision)
             record = self._record(decision, json.loads(row[0]), self._labels(decision) | labels)
             self._db.executemany("INSERT OR REPLACE INTO outcomes VALUES (?, ?, ?, ?)",
-                                 [(decision, qid, json.dumps(label), time.time()) for qid, label in labels.items()])
+                                 [(decision, qid, json.dumps(label), self._now()) for qid, label in labels.items()])
         return record
 
     def records(self) -> Iterator[Record]:

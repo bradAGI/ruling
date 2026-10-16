@@ -73,6 +73,7 @@ class Settings:
     openrouter_budget_usd: float = 1.0
     models_path: Path | None = None
     ledger_path: Path | None = None
+    ledger_retain_days: float | None = None
     max_pending: int = 64
     host: str = "127.0.0.1"
     port: int = 8010
@@ -112,6 +113,7 @@ class Settings:
             openrouter_budget_usd=float(env.get("RULING_OPENROUTER_BUDGET_USD", cls.openrouter_budget_usd)),
             models_path=Path(models) if models else None,
             ledger_path=Path(ledger) if ledger else None,
+            ledger_retain_days=float(env["RULING_LEDGER_RETAIN_DAYS"]) if env.get("RULING_LEDGER_RETAIN_DAYS") else None,
             max_pending=int(env.get("RULING_MAX_PENDING", cls.max_pending)),
             host=env.get("RULING_HOST", cls.host),
             port=int(env.get("RULING_PORT", cls.port)),

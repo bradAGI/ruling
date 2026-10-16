@@ -40,6 +40,7 @@ The first start downloads the default model, `mlx-community/Qwen3.5-4B-4bit`
 | `RULING_FAILOVER_TO` | unset | A model that answers the whole request whenever the primary is unavailable (429, 502–504, or a timeout); the response's `model` names whichever answered |
 | `RULING_MODELS` | unset | A JSON file of further models to serve by name beside the primary; see [Serve several models](#serve-several-models) |
 | `RULING_LEDGER` | unset | A SQLite file that records every answered request not marked `exclude_from_training`, its state included, so outcomes can be reported and the decisions retrained on; see [Learn from your own traffic](#learn-from-your-own-traffic) |
+| `RULING_LEDGER_RETAIN_DAYS` | unset | With a ledger, how long a decision with no reported outcome is kept before it is dropped, state and all; decisions with outcomes are kept however old. Unset keeps everything |
 | `RULING_MAX_PENDING` | `64` | Requests allowed in flight at once. The next one is refused with 429 `queue_full` and a `Retry-After` estimated from the queue and recent latency |
 | `RULING_HOST`, `RULING_PORT` | `127.0.0.1`, `8010` | Bind address |
 
@@ -236,7 +237,9 @@ breaking a training run later. A second report for the same question replaces
 the first. `ruling export-decisions --ledger FILE --output RECORDS` writes every
 decision with an outcome as a training record, unlabeled questions left
 unlabeled, ready for `ruling train --data RECORDS`. Off by default: the ledger
-holds your states verbatim.
+holds your states verbatim. `RULING_LEDGER_RETAIN_DAYS=30` drops a decision
+that has gone 30 days with no outcome, so the file holds one month of
+unresolved traffic plus everything resolved, rather than growing forever.
 
 A request with `"exclude_from_training": true`, meant for benchmark and
 evaluation traffic, is answered as usual but never logged, and its response

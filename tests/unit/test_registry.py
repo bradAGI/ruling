@@ -105,3 +105,10 @@ def test_settings_read_the_registry_file_and_queue_limit(monkeypatch):
 def test_settings_read_the_image_token_cap(monkeypatch):
     monkeypatch.setenv("RULING_MAX_IMAGE_TOKENS", "512")
     assert Settings.from_env().max_image_tokens == 512
+
+
+def test_settings_read_the_ledger_retention_in_days(monkeypatch):
+    monkeypatch.setenv("RULING_LEDGER_RETAIN_DAYS", "30")
+    assert Settings.from_env().ledger_retain_days == 30
+    monkeypatch.delenv("RULING_LEDGER_RETAIN_DAYS")
+    assert Settings.from_env().ledger_retain_days is None
