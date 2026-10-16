@@ -102,6 +102,17 @@ class _Pass:
     tokens: list[int]
 
 
+@dataclass(frozen=True)
+class _Prefix:
+    """The tokens through the state, the template tail every question ends with, and what a
+    vision model needs beside them: its processor inputs for the images in the state, and how
+    far its position ids sit below the token count once the images are read."""
+    tokens: list[int]
+    tail: str
+    vision_inputs: dict | None = None
+    position_delta: int = 0
+
+
 class TwoStageChoice:
     """Template method for engines that read at most `pass_options` options in one pass.
 
@@ -159,7 +170,8 @@ def answer(question: Choice | Score | Noul, raw: RawScore, calibration: Calibrat
     return NoulAnswer(noul=distribution["yes"])
 
 
-def option_logits(model, tokens: mx.array, cache, last: mx.array, option_ids: mx.array) -> mx.array:
+def option_logits(model, tokens: mx.array, cache, last: mx.array, option_ids: mx.array,
+                  position_ids: mx.array | None = None) -> mx.array:
     """Logits for each row's answer codes at its last real position, shape [batch, options].
 
     Only the hidden state at the answer position goes through the output head,
@@ -169,7 +181,8 @@ def option_logits(model, tokens: mx.array, cache, last: mx.array, option_ids: mx
     or tied input embeddings.
     """
     text = getattr(model, "language_model", model)
-    hidden = text.model(tokens, cache)
+    # Multimodal positions are passed only when images moved them; text-only models take none.
+    hidden = text.model(tokens, cache=cache, **({} if position_ids is None else {"position_ids": position_ids}))
     picked = hidden[mx.arange(tokens.shape[0]), last]
     tied = getattr(text, "tie_word_embeddings", None)
     if tied is None:
@@ -256,7 +269,7 @@ class Engine(TwoStageChoice):
         self.rotations = rotations
         self.prior_debias = prior_debias
         self.adapter = adapter_digest(adapter)
-        self.model, self.tokenizer = load(model_id, adapter_path=str(adapter) if adapter else None)
+        self.model, self.tokenizer = self._load(model_id, adapter)
         # Adapter weights come back lazy, and a request thread has no CPU stream to realize them
         # on; settle every parameter here, on the thread that loaded the model.
         mx.eval(self.model.parameters())
@@ -279,6 +292,9 @@ class Engine(TwoStageChoice):
         self._priors: dict[int, np.ndarray] = {}
         calibration.check(self.provenance)
         self.calibration = calibration
+
+    def _load(self, model_id: str, adapter: Path | None):
+        return load(model_id, adapter_path=str(adapter) if adapter else None)
 
     class IncompatibleAdapter(ValueError):
         """The adapter's LoRA layout differs from the one the shared model was converted to."""
@@ -305,7 +321,7 @@ class Engine(TwoStageChoice):
         if self._lora_weights is None and shared.lora is not None:
             self._lora_weights = mx.load(str(self._adapter_path / ADAPTER_WEIGHTS))
             mx.eval(list(self._lora_weights.values()))
-        other = Engine.__new__(Engine)
+        other = type(self).__new__(type(self))
         other.__dict__.update(self.__dict__)
         other._priors = {}
         other._adapter_path = adapter
@@ -346,16 +362,20 @@ class Engine(TwoStageChoice):
         rendered_state = render_state(state)
         if SPLIT_MARKER in rendered_state:
             raise ValueError("state contains the reserved split marker")
+        content = self._user_content(state, rendered_state)
         if self._system_role:
-            messages = [{"role": "system", "content": SYSTEM_PROMPT},
-                        {"role": "user", "content": rendered_state + SPLIT_MARKER}]
+            messages = [{"role": "system", "content": SYSTEM_PROMPT}, {"role": "user", "content": content}]
         else:
-            messages = [{"role": "user", "content": SYSTEM_PROMPT + "\n\n" + rendered_state + SPLIT_MARKER}]
+            messages = [{"role": "user", "content": _prepend(SYSTEM_PROMPT + "\n\n", content)}]
         text = self.tokenizer.apply_chat_template(
             messages, tokenize=False, add_generation_prompt=True, enable_thinking=thinking
         )
         prefix, tail = text.split(SPLIT_MARKER)
         return prefix, tail
+
+    def _user_content(self, state: State, rendered_state: str) -> str | list[dict]:
+        """The user turn through the split marker."""
+        return rendered_state + SPLIT_MARKER
 
     def _template_accepts_system_role(self) -> bool:
         try:
@@ -370,10 +390,10 @@ class Engine(TwoStageChoice):
     # ---- scoring -----------------------------------------------------------
 
     def _score_plain(self, state: State, questions: dict[str, Choice | Score | Noul]) -> Scored:
-        prefix_text, tail = self.split_prompt(state)
-        prefix_tokens = self._encode(prefix_text)
+        prefix = self._prefix(state)
+        prefix_tokens = prefix.tokens
         passes = [
-            _Pass(qid, rendered.keys, self._encode(rendered.text + tail))
+            _Pass(qid, rendered.keys, self._encode(rendered.text + prefix.tail))
             for qid, question in questions.items()
             for rendered in (render_question(question, self.codes.codes, r) for r in self._rotations_for(question))
         ]
@@ -390,9 +410,9 @@ class Engine(TwoStageChoice):
         per_question: dict[str, dict[str, list[float]]] = {qid: {} for qid in questions}
         with self._lock:
             self._activate()
-            prefix_cache = self._encode_prefix(prefix_tokens)
+            prefix_cache = self._encode_prefix(prefix)
             for chunk in self._chunks(passes, len(prefix_tokens)):
-                for one, logits in zip(chunk, self._forward_batch(prefix_cache, chunk)):
+                for one, logits in zip(chunk, self._forward_batch(prefix_cache, chunk, prefix)):
                     log_probs = log_softmax(logits)
                     if self.prior_debias:
                         log_probs = log_probs - self._prior(len(one.keys))
@@ -408,11 +428,10 @@ class Engine(TwoStageChoice):
     def _prior(self, cardinality: int) -> np.ndarray:
         """Log-probabilities the model assigns to each letter with no content to go on."""
         if cardinality not in self._priors:
-            prefix_text, tail = self.split_prompt(PRIOR_STATE)
+            prefix = self._prefix(PRIOR_STATE)
             rendered = render_question(prior_question(cardinality), self.codes.codes)
-            cache = self._encode_prefix(self._encode(prefix_text))
-            one = _Pass("prior", rendered.keys, self._encode(rendered.text + tail))
-            self._priors[cardinality] = log_softmax(self._forward_batch(cache, [one])[0])
+            one = _Pass("prior", rendered.keys, self._encode(rendered.text + prefix.tail))
+            self._priors[cardinality] = log_softmax(self._forward_batch(self._encode_prefix(prefix), [one], prefix)[0])
         return self._priors[cardinality]
 
     def _chunks(self, passes: list[_Pass], prefix_length: int) -> list[list[_Pass]]:
@@ -426,7 +445,7 @@ class Engine(TwoStageChoice):
                 chunks[-1] = candidate
         return chunks
 
-    def _forward_batch(self, prefix_cache, passes: list[_Pass]) -> list[np.ndarray]:
+    def _forward_batch(self, prefix_cache, passes: list[_Pass], prefix: _Prefix) -> list[np.ndarray]:
         """One padded forward pass for every suffix, against replicas of the prefix cache."""
         batch = len(passes)
         width = max(len(p.tokens) for p in passes)
@@ -441,7 +460,8 @@ class Engine(TwoStageChoice):
         last = mx.array([len(p.tokens) - 1 for p in passes])
         cardinality = max(len(p.keys) for p in passes)
         ids = mx.array([self.codes.token_ids[:cardinality] for _ in passes])
-        logits = np.array(option_logits(self.model, tokens, cache, last, ids), dtype=np.float64)
+        positions = suffix_positions(prefix, batch, width)
+        logits = np.array(option_logits(self.model, tokens, cache, last, ids, positions), dtype=np.float64)
         return [row[: len(one.keys)] for row, one in zip(logits, passes)]
 
     # ---- answers -----------------------------------------------------------
@@ -465,10 +485,31 @@ class Engine(TwoStageChoice):
     def _encode(self, text: str) -> list[int]:
         return self.tokenizer.encode(text, add_special_tokens=False)
 
-    def _encode_prefix(self, tokens: list[int]):
+    def _prefix(self, state: State) -> _Prefix:
+        prefix_text, tail = self.split_prompt(state)
+        return _Prefix(self._encode(prefix_text), tail)
+
+    def _encode_prefix(self, prefix: _Prefix):
+        tokens = prefix.tokens
         cache = make_prompt_cache(self.model)
         array = mx.array(tokens)[None]
         for start in range(0, len(tokens), PREFILL_STEP):
             self.model(array[:, start : start + PREFILL_STEP], cache=cache)
             mx.eval([c.state for c in cache])
         return cache
+
+
+def suffix_positions(prefix: _Prefix, batch: int, width: int) -> mx.array | None:
+    """Multimodal position ids for `batch` suffixes of `width` tokens after `prefix`, or None
+    when the model counts positions from the cache as usual: after images, a token's
+    position on every axis is its index plus the prefix's (negative) delta."""
+    if not prefix.position_delta:
+        return None
+    row = mx.arange(width) + len(prefix.tokens) + prefix.position_delta
+    return mx.broadcast_to(row[None, None, :], (3, batch, width))
+
+
+def _prepend(text: str, content: str | list[dict]) -> str | list[dict]:
+    if isinstance(content, str):
+        return text + content
+    return [{"type": "text", "text": text}, *content]

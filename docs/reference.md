@@ -16,13 +16,14 @@ The first start downloads the default model, `mlx-community/Qwen3.5-4B-4bit`
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `RULING_MODEL` | `mlx-community/Qwen3.5-4B-4bit` | The primary model. Any MLX chat model, `openai:<model>` for a model behind an OpenAI-compatible server, `openrouter:<model>`, `vllm:<model or adapter>` for vLLM's own decision endpoint, or `typesafe:<alias>` for TypeSafe's API or any server speaking its protocol (`TYPESAFE_BASE_URL`, `TYPESAFE_API_KEY`). Tested: Qwen3.5, Llama 3.2, Gemma 3 |
+| `RULING_MODEL` | `mlx-community/Qwen3.5-4B-4bit` | The primary model. Any MLX chat model, `openai:<model>` for a model behind an OpenAI-compatible server, `openrouter:<model>`, `vllm:<model or adapter>` for vLLM's own decision endpoint, `vision:<MLX model>` for a local vision-language model that also reads images in the state (needs `ruling[vision]`), or `typesafe:<alias>` for TypeSafe's API or any server speaking its protocol (`TYPESAFE_BASE_URL`, `TYPESAFE_API_KEY`). Tested: Qwen3.5, Llama 3.2, Gemma 3 |
 | `RULING_ROTATIONS` | `3` | Answer orderings averaged per question. `1` is fastest. See How it works |
 | `RULING_PRIOR_DEBIAS` | `false` | Subtract a content-free letter prior. Measured, does not help; kept so you can re-check with another model |
 | `RULING_CALIBRATION` | unset | Path to a `calibration.json` written by `ruling calibrate` |
 | `RULING_API_KEY` | unset | When set, `/v1/*` requires `Authorization: Bearer <key>` |
 | `RULING_MAX_INPUT_TOKENS` | `65536` | Whole-request budget for a local MLX model: state plus every question. Above this the request is rejected with 422 `context_too_long`. Remote models (`openai:`, `vllm:`, `typesafe:`) are held to their host's own limit instead |
 | `RULING_MAX_BRANCH_TOKENS` | `32768` | Per-branch budget for a local MLX model: state plus one question. A single oversized question is rejected even when the request fits |
+| `RULING_MAX_IMAGE_TOKENS` | `1024` | Tokens one image may become on a `vision:` model; a larger image is scaled down to fit. A 12-megapixel photo is about 15,000 tokens uncapped |
 | `RULING_MEMORY_FRACTION`, `RULING_CACHE_LIMIT_GB` | `0.5`, `4` | MLX's ceiling as a share of physical memory, and how much freed buffer memory it may keep. A job that cannot fit raises instead of swapping. Ignored where the backend reports no memory size (Linux CPU) |
 | `RULING_OPENAI_BASE_URL` | unset | Required for `openai:` models. The endpoint serving them, ending in `/v1` |
 | `RULING_OPENAI_API_KEY` | unset | Sent as a bearer token when the host wants one. Local servers usually do not |
@@ -260,17 +261,27 @@ structure.
 most 8 per decision and 5 MB each. The model sees the state with each image
 replaced by `<image 1>`, `<image 2>`, … in document order, and the images
 themselves under those names, so a question can say "the receipt in
-`<image 1>`". `openai:` models get them as image content parts, so any
-vision model behind vLLM, SGLang or `mlx_vlm.server` reads them; a
-`typesafe:` model forwards the state unchanged. A model that reads only text
-answers 422 `unsupported_modality`, and `GET /v1/models` lists each model's
-`modalities`.
+`<image 1>`". Three ways to serve them:
 
-```bash
-uv run python -m mlx_vlm.server --model mlx-community/Qwen3.5-4B-4bit --port 8080 --top-logprobs-k 20
-RULING_MODEL=openai:mlx-community/Qwen3.5-4B-4bit RULING_OPENAI_BASE_URL=http://127.0.0.1:8080/v1 \
-  RULING_OPENAI_EXTRA_BODY='{"chat_template_kwargs": {"enable_thinking": false}}' uv run ruling serve
-```
+- **Locally on a Mac:** `vision:` loads a vision-language model through
+  mlx-vlm, vision tower included. The default Qwen3.5 checkpoints are such
+  models; the plain `RULING_MODEL` path loads only their text half.
+
+  ```bash
+  uv sync --extra vision          # or: pip install 'ruling[vision]'
+  RULING_MODEL=vision:mlx-community/Qwen3.5-4B-4bit uv run ruling serve
+  ```
+
+  The state and its images are encoded once and every question is scored
+  against them, as for text. Eight 12-megapixel photos with nine questions
+  took 10 s and 7.2 GB at peak on the 4B model, every color question right.
+  A `vision:` model takes no adapter: training reads text only.
+- **Any vision model behind an OpenAI-compatible server** (vLLM, SGLang,
+  `mlx_vlm.server`): `openai:` models get the images as content parts.
+- **`typesafe:`** forwards the state unchanged; the remote service decides.
+
+A model that reads only text answers 422 `unsupported_modality`, and
+`GET /v1/models` lists each model's `modalities`.
 
 Answers come back keyed by the same ids:
 

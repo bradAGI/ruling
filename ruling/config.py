@@ -51,6 +51,7 @@ class Settings:
     adapter_path: Path | None = None
     max_input_tokens: int = 65_536
     max_branch_tokens: int = 32_768
+    max_image_tokens: int = 1024
     rotations: int = 3
     prior_debias: bool = False
     api_key: str | None = None
@@ -89,6 +90,7 @@ class Settings:
             adapter_path=Path(adapter) if adapter else None,
             max_input_tokens=int(env.get("RULING_MAX_INPUT_TOKENS", cls.max_input_tokens)),
             max_branch_tokens=int(env.get("RULING_MAX_BRANCH_TOKENS", cls.max_branch_tokens)),
+            max_image_tokens=int(env.get("RULING_MAX_IMAGE_TOKENS", cls.max_image_tokens)),
             rotations=int(env.get("RULING_ROTATIONS", cls.rotations)),
             prior_debias=_flag(env.get("RULING_PRIOR_DEBIAS", str(cls.prior_debias))),
             api_key=env.get("RULING_API_KEY") or None,

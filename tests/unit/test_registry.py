@@ -100,3 +100,11 @@ def test_settings_read_the_registry_file_and_queue_limit(monkeypatch):
     monkeypatch.setenv("RULING_MAX_PENDING", "3")
     settings = Settings.from_env()
     assert settings.models_path == Path("/tmp/models.json") and settings.max_pending == 3
+
+
+def test_a_vision_model_refuses_an_adapter_before_loading_anything(tmp_path, monkeypatch):
+    monkeypatch.setenv("RULING_MAX_IMAGE_TOKENS", "512")
+    settings = Settings.from_env()
+    assert settings.max_image_tokens == 512
+    with pytest.raises(ValueError, match="takes no adapter"):
+        registry_module.build_engine(Settings(model="vision:any/model", adapter_path=tmp_path))

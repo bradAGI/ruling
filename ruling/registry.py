@@ -30,6 +30,7 @@ from ruling.hosted import (
     VllmEngine,
 )
 from ruling.questions import DEFAULT_MODEL_ALIASES, ModelInfo
+from ruling.vision import VISION_PREFIX
 
 ENTRY_FIELDS = ("model", "adapter", "calibration", "base_url")
 REMOTE_PREFIXES = (TYPESAFE_PREFIX, VLLM_PREFIX, HOSTED_PREFIX)
@@ -120,6 +121,12 @@ def build_engine(settings: Settings):
             raise ValueError("set RULING_OPENROUTER_PROVIDERS to the hosts allowed to serve the model")
         return OpenRouterEngine(settings.model, calibration, settings.rotations, list(settings.openrouter_providers),
                                 Budget(settings.openrouter_budget_usd))
+    if settings.model.startswith(VISION_PREFIX):
+        if settings.adapter_path:
+            raise ValueError(f"{settings.model} takes no adapter: LoRA training reads text only")
+        from ruling.vision import VisionEngine
+        return VisionEngine(settings.model, calibration, settings.max_input_tokens, settings.rotations,
+                            settings.prior_debias, settings.max_image_tokens, settings.max_branch_tokens)
     if is_checkpoint(settings.model):
         return DecisionEngine(Path(settings.model), calibration, settings.max_input_tokens)
     return Engine(settings.model, calibration, settings.max_input_tokens, settings.rotations, settings.prior_debias,
