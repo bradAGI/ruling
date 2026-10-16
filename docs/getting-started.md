@@ -2,11 +2,13 @@
 
 ## Try it in two minutes
 
-You need an Apple Silicon Mac, Python 3.12+, and [uv](https://docs.astral.sh/uv/).
+You need an Apple Silicon Mac and Python 3.12+. Install from PyPI, or
+[from a checkout](development.md) with `uv sync` and `uv run` in front of
+each `ruling` command below.
 
 ```bash
-uv sync
-uv run ruling serve          # downloads a 2.3 GB model on first start, then serves http://127.0.0.1:8010
+pip install ruling           # or: uv tool install ruling
+ruling serve                 # downloads a 2.3 GB model on first start, then serves http://127.0.0.1:8010
 ```
 
 ```bash
@@ -61,8 +63,8 @@ images anywhere in the state as `{"type": "image", "media_type", "data"}`
 objects; questions refer to them as `<image 1>`, `<image 2>`, … in order:
 
 ```bash
-uv sync --extra vision
-RULING_MODEL=vision:mlx-community/Qwen3.5-4B-4bit uv run ruling serve
+pip install 'ruling[vision]'     # from a checkout: uv sync --extra vision
+RULING_MODEL=vision:mlx-community/Qwen3.5-4B-4bit ruling serve
 ```
 
 ```bash

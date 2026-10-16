@@ -4,11 +4,11 @@ Everything the front page summarizes, in full. Moved here to keep the README sho
 
 ## Install and run
 
-Requires an Apple Silicon Mac, Python 3.12+, and [uv](https://docs.astral.sh/uv/).
+Requires an Apple Silicon Mac and Python 3.12+.
 
 ```bash
-uv sync
-uv run ruling serve          # http://127.0.0.1:8010, playground at /
+pip install ruling           # or: uv tool install ruling; from a checkout: uv sync, then uv run ruling
+ruling serve                 # http://127.0.0.1:8010, playground at /
 ```
 
 The first start downloads the default model, `mlx-community/Qwen3.5-4B-4bit`

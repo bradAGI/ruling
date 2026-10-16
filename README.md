@@ -30,15 +30,16 @@ is ahead. Not affiliated with TypeSafe AI.
 
 ## Installation
 
-You need an Apple Silicon Mac, Python 3.12+, and [uv](https://docs.astral.sh/uv/).
+You need an Apple Silicon Mac and Python 3.12+.
 
 ```bash
-git clone https://github.com/bradAGI/ruling && cd ruling
-uv sync                       # add --extra vision to ask about images
-uv run ruling serve           # downloads a 2.3 GB model on first start, then serves http://127.0.0.1:8010
+pip install ruling            # or: uv tool install ruling; add [vision] to ask about images
+ruling serve                  # downloads a 2.3 GB model on first start, then serves http://127.0.0.1:8010
 ```
 
-Open `http://127.0.0.1:8010/` for the playground. On NVIDIA, see
+Open `http://127.0.0.1:8010/` for the playground. To work on ruling itself,
+clone the repository and `uv sync`; see
+[Development](docs/development.md). On NVIDIA, see
 [vLLM](docs/reference.md#on-nvidia-vllm). Before relying on an answer, read the
 [limits](docs/getting-started.md#limits).
 
