@@ -76,7 +76,8 @@ Glance's 0.939 and 0.933; the best hosted models in its table reach 0.961 and
 0.937. The 35B as a `vision:` model fixes most of the insect errors and
 pools to 0.930 and 0.933, level with Glance on pick-one, at 0.6 s a decision
 against the 4B's 0.4 s. A yes/no about a full-size photo takes 0.9 s on the
-4B. Every number,
+4B. Fine-tuning the 4B on 84 insect photos lifts a held-out half from 0.886
+to 0.924, at the cost of calibration until a temperature is fitted. Every number,
 with intervals and the paired comparison, is in
 [Measurements](measurements.md#images-glances-fresh-photo-sets).
 

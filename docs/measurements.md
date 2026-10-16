@@ -380,6 +380,34 @@ stays 3 points short of Glance's 0.943, now by saying yes too often (12 of
 decision at the median against the 4B's 374 ms, and 20 GB at peak, within
 ruling's default memory cap.
 
+### Fine-tuning a vision model on photos
+
+The insect-order photos, split into stratified halves of 105 (seed 0), with
+one Choice over the seven orders. `ruling train` on
+`vision:mlx-community/Qwen3.5-4B-4bit` with 84 of the training half (21 held
+for validation): 300 steps, batch 4, 16 LoRA layers, learning rate 3e-5,
+1,024 image tokens; the saved adapter is the best validation checkpoint,
+step 200. Twenty-three minutes on one Mac at 300 to 600 tokens a second,
+23 GB physical footprint at peak. Scored on the other half:
+
+| held-out 105 photos | 3 orderings: base | 3 orderings: adapter | 1 ordering: base | 1 ordering: adapter |
+|---|---:|---:|---:|---:|
+| accuracy | 0.886 | **0.924** | 0.876 | **0.933** |
+| log loss | 0.302 | 0.474 | 0.394 | 0.521 |
+| ECE | 0.048 | 0.074 | 0.039 | 0.055 |
+| coverage at 5% error | 0.924 | 0.933 | 0.857 | 0.981 |
+| confident errors (wrong at p ≥ 0.9) | 0.010 | 0.038 | 0.019 | 0.038 |
+
+Paired over photos, 10,000 bootstrap draws: +3.8 points [−1.0, +9.5] at three
+orderings (6 photos wrong to right, 2 right to wrong) and +5.7 [+1.0, +11.4]
+at one. The adapter removes every fly error the base made; what remains is
+true bugs, grasshoppers and wasps taken for one another. It is also sharper
+than it is right: log loss and confident errors rise even as accuracy does,
+so an adapter trained on photos wants a temperature fitted on a calibration
+set it did not see, as any adapter here does. This split is not Glance's,
+so the 0.886 baseline is not the 0.914 of the comparison above. Training
+records with the photos are not committed.
+
 Median latency per decision for the 4B on one Mac was 374 ms: 916 ms for a yes/no about
 a full-size Commons photo (Glance reports 1.1 s on an M5) and 277 ms on the
 smaller iNaturalist photos (Glance: 0.33 s). Peak memory for the run was

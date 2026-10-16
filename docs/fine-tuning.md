@@ -95,7 +95,11 @@ model, and every image adds up to `--max-image-tokens` tokens to its example.
 On the 0.8B test model, teaching an arbitrary code for each of three colors,
 which only the picture shows, took 300 steps at a learning rate of 3e-5 to
 bring the validation loss from 2.3 to 0.4; fewer steps, or higher rates, left
-it at chance. We have not yet measured a gain on real photos.
+it at chance. On real photos, 300 steps on 84 insect pictures took the 4B
+from 0.886 to 0.924 on a held-out half (+5.7 points at one ordering), fixing
+every fly it had mistaken for a bee or a bug, but left it overconfident:
+fit a temperature on a calibration set afterward. The numbers are in
+[Measurements](measurements.md#fine-tuning-a-vision-model-on-photos).
 
 ## Keep learning from production
 
