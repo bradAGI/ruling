@@ -49,6 +49,24 @@ def no_hub_lookups(monkeypatch):
     monkeypatch.setattr(registry_module, "model_released", lambda model_id: "2026-01-01")
 
 
+def run_apart(main) -> None:
+    """Run an async main on a thread of its own. The browser tests leave an event loop running
+    on the main thread, and anyio refuses to start another one there."""
+    failure = []
+
+    def runner():
+        try:
+            anyio.run(main)
+        except BaseException as error:  # re-raised below, so the test fails where it should
+            failure.append(error)
+
+    thread = threading.Thread(target=runner)
+    thread.start()
+    thread.join()
+    if failure:
+        raise failure[0]
+
+
 def app_with(engines: dict, default: str, api_key=None, max_pending=4):
     return create_app(Registry(default, engines), api_key, max_pending)
 
@@ -168,7 +186,7 @@ def test_a_full_queue_turns_the_next_request_away_with_retry_after():
                 statuses[2] = await client.post("/v1/systemone", json=PAYLOAD)
                 gate.set()
 
-    anyio.run(run)
+    run_apart(run)
     assert statuses[2].status_code == 429
     assert statuses[2].json()["error"]["code"] == "queue_full" and statuses[2].headers["retry-after"] == "1"
     assert statuses[0].status_code == 200 and statuses[1].status_code == 200
