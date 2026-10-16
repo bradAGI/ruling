@@ -29,7 +29,7 @@ export class RulingClient {
   }
 
   systemOne({ state, questions, model, excludeFromTraining }) {
-    // The flag goes only when set, as Endor's client sends it, so every other body is exactly System One's.
+    // The flag goes only when set, so every other body is exactly System One's.
     const body = { state, questions, model: model ?? null, ...(excludeFromTraining && { exclude_from_training: true }) };
     return this.#request("POST", "/v1/systemone", body);
   }

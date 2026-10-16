@@ -216,7 +216,7 @@ def test_a_logged_decision_takes_its_outcome_and_exports_as_training_data(engine
 
 
 def test_a_decision_kept_out_of_training_is_answered_but_not_logged(engine, tmp_path):
-    # Endor's clients send this field to keep benchmark and evaluation traffic out of training.
+    # Clients send this field to keep benchmark and evaluation traffic out of training.
     app = create_app(Registry.single(engine), None, 4, DecisionLedger(tmp_path / "ledger.sqlite"))
     with TestClient(app) as client:
         excluded = client.post("/v1/systemone", json={**PAYLOAD, "exclude_from_training": True}).json()
@@ -230,25 +230,3 @@ def test_without_a_ledger_the_wire_format_is_unchanged(app):
     with TestClient(app) as client:
         assert set(client.post("/v1/systemone", json=PAYLOAD).json()) == {"model", "answers", "usage"}
         assert client.post("/v1/decisions/x/outcome", json={"labels": {}}).status_code == 404
-
-
-def test_endors_client_against_live_server(live_server_with_key, engine):
-    """Endor's own client, unmodified, pointed at ruling by its base URL alone."""
-    from endor import Choice, EndorClient, Noul, RetryPolicy, Score
-
-    with EndorClient(api_key="s3cret", base_url=live_server_with_key, retry=RetryPolicy(max_retries=0)) as client:
-        response = client.system_one(
-            PAYLOAD["state"],
-            {"team": Choice(instructions="Which team should handle this?",
-                            criteria=PAYLOAD["questions"]["team"]["criteria"]),
-             "urgency": Score(instructions="How urgent is this?", criteria=["Can wait", "This week", "Today"]),
-             "refund": Noul(instructions="The customer asks for a refund.")},
-            model="default",
-        )
-        models = client.models.list()
-
-    assert response.model == engine.model_id
-    assert response.choices["team"].choice == "billing"
-    assert response.nouls["refund"].noul > 0.5
-    assert set(response.scores["urgency"].probabilities) == {"0", "1", "2"}
-    assert models.models[0].name == engine.model_id

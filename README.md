@@ -69,8 +69,8 @@ same state.
 ### Ask about images
 
 The default Qwen3.5 models can see. Serve one as a `vision:` model and put
-images anywhere in the state, in the shape Endor uses; questions refer to them
-as `<image 1>`, `<image 2>`, … in order:
+images anywhere in the state as `{"type": "image", "media_type", "data"}`
+objects; questions refer to them as `<image 1>`, `<image 2>`, … in order:
 
 ```bash
 uv sync --extra vision

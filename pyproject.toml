@@ -31,7 +31,6 @@ vision = [
 
 [dependency-groups]
 dev = [
-    "endor>=0.6.1",
     "mlx-vlm>=0.7.8",
     "peft>=0.21.2",
     "pytest>=8",

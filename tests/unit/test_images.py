@@ -1,4 +1,4 @@
-"""Images ride in the state in Endor's shape; ruling checks them where the hosted services do."""
+"""Images ride in the state as typed objects; ruling checks them where the hosted services do."""
 
 import base64
 import struct

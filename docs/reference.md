@@ -227,9 +227,9 @@ decision with an outcome as a training record, unlabeled questions left
 unlabeled, ready for `ruling train --data RECORDS`. Off by default: the ledger
 holds your states verbatim.
 
-A request with `"exclude_from_training": true`, the field Endor's clients send
-for benchmark and evaluation traffic, is answered as usual but never logged,
-and its response has no `id`.
+A request with `"exclude_from_training": true`, meant for benchmark and
+evaluation traffic, is answered as usual but never logged, and its response
+has no `id`.
 
 `ruling retrain` closes the loop on a schedule, with nobody watching:
 
@@ -276,7 +276,7 @@ Instructions, option descriptions, and levels may be strings or JSON
 structure.
 
 **Images.** Put `{"type": "image", "media_type": "image/png", "data":
-"<base64>"}` anywhere in the state, the shape Endor uses: PNG, JPEG or WebP, at
+"<base64>"}` anywhere in the state: PNG, JPEG or WebP, at
 most 8 per decision and 5 MB each. The model sees the state with each image
 replaced by `<image 1>`, `<image 2>`, … in document order, and the images
 themselves under those names, so a question can say "the receipt in
@@ -380,23 +380,6 @@ covered by an integration test that installs the real
 [`typesafe-sdk`](https://github.com/typesafe-ai/typesafe-sdk-python) package
 and runs it against a live ruling server, so the compatibility claim fails
 loudly if either side drifts.
-
-Endor's client works the same way, by its base URL alone, so code written for
-Endor can run against a local ruling for development, offline or in tests:
-
-```python
-import endor   # the official package, unmodified
-
-client = endor.EndorClient(api_key="whatever-you-set-as-RULING_API_KEY", base_url="http://127.0.0.1:8010")
-client.system_one(state, questions, model="tickets/v1")
-```
-
-Endor names models `<project>/<name>`; give a `RULING_MODELS` entry the same
-name and the call needs no change. Decisions, `client.models.list()` and every
-answer type are covered by an integration test against the real
-[`endor`](https://pypi.org/project/endor/) package. Its projects, datasets,
-training runs and billing are Endor's platform and have no counterpart here;
-ruling trains with `ruling train`.
 
 ## Clients
 

@@ -25,7 +25,7 @@ class RulingClient:
     ) -> SystemOneResponse:
         request = SystemOneRequest(model=model, state=state, questions=questions,
                                    exclude_from_training=exclude_from_training)
-        # The flag goes only when set, as Endor's client sends it, so every other body is exactly System One's.
+        # The flag goes only when set, so every other body is exactly System One's.
         body = request.model_dump(exclude=None if exclude_from_training else {"exclude_from_training"})
         response = self._http.post("/v1/systemone", json=body)
         response.raise_for_status()

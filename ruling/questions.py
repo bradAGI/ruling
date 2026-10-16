@@ -22,8 +22,8 @@ MAX_CHOICE_OPTIONS = 255
 MAX_SCORE_LEVELS = 10
 MAX_QUESTIONS = 64
 
-# Endor's image limits: an image is {"type": "image", "media_type", "data": <base64>}
-# anywhere in the state, PNG, JPEG or WebP, at most 8 per decision and 5 MB each.
+# An image is {"type": "image", "media_type", "data": <base64>} anywhere in the state,
+# PNG, JPEG or WebP, at most 8 per decision and 5 MB each.
 MAX_IMAGES = 8
 MAX_IMAGE_BYTES = 5 * 2**20
 IMAGE_REFERENCE = "<image {}>"
@@ -187,7 +187,7 @@ class SystemOneRequest(BaseModel):
     model: str | None = None
     state: State
     questions: dict[str, Question] = Field(min_length=1, max_length=MAX_QUESTIONS)
-    # Endor's name for traffic that must never become training data, such as benchmarks and evaluations.
+    # Marks traffic that must never become training data, such as benchmarks and evaluations.
     exclude_from_training: bool = False
 
     @field_validator("state")
