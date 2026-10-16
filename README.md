@@ -66,6 +66,30 @@ The playground's model picker lists every name the server answers to; [serve
 several models](#serve-several-models-from-one-process) to compare them on the
 same state.
 
+### Ask about images
+
+The default Qwen3.5 models can see. Serve one as a `vision:` model and put
+images anywhere in the state, in the shape Endor uses; questions refer to them
+as `<image 1>`, `<image 2>`, … in order:
+
+```bash
+uv sync --extra vision
+RULING_MODEL=vision:mlx-community/Qwen3.5-4B-4bit uv run ruling serve
+```
+
+```bash
+curl -s localhost:8010/v1/systemone -H 'content-type: application/json' -d '{
+  "state": {"note": "Customer says the parcel arrived crushed.",
+            "photo": {"type": "image", "media_type": "image/jpeg", "data": "'"$(base64 < parcel.jpg)"'"}},
+  "questions": {"damaged": {"type": "noul", "instructions": "<image 1> shows a damaged parcel."}}}'
+```
+
+The state and its images are read once, however many questions you ask:
+eight 12-megapixel photos and nine questions took 10 s and 7.2 GB on the 4B
+model. Up to 8 images of 5 MB each, PNG, JPEG or WebP. Any vision model behind
+an OpenAI-compatible server reads them too, through `openai:`; see
+[docs/reference.md](docs/reference.md#api).
+
 ## Pick the primary model
 
 `RULING_MODEL` is the **primary** model: it answers every question. It is the
@@ -76,6 +100,7 @@ questions the primary is unsure about, and is set separately with
 | you want as primary | set | notes |
 |---|---|---|
 | the default | nothing | `mlx-community/Qwen3.5-4B-4bit`, 2.3 GB, 3 questions in ~136 ms |
+| the default, reading images too | `RULING_MODEL=vision:mlx-community/Qwen3.5-4B-4bit` | the same weights with their vision tower; needs `uv sync --extra vision` |
 | Jev-level accuracy | `RULING_MODEL=mlx-community/Qwen3.6-35B-A3B-4bit` | 19 GB, ~204 ms, the model in the chart above |
 | any other MLX checkpoint | `RULING_MODEL=<hub id or local path>` | tested with Qwen, Llama 3.2, Gemma 3 |
 | a model you serve elsewhere | `RULING_MODEL=openai:<name>` + `RULING_OPENAI_BASE_URL` | vLLM, llama.cpp, `mlx_lm.server`, or a commercial API; needs `top_logprobs` |
@@ -169,9 +194,17 @@ three- to thirteen-fold. Full card and reproduction in
 
 **Then keep learning from production.** Set `RULING_LEDGER=ledger.sqlite` and
 the server records every decision and returns its `id` (a request can opt out
-with `exclude_from_training`); post what turned out
-to be right to `/v1/decisions/<id>/outcome`, and `ruling export-decisions`
-turns the resolved ones into training records for step 2. See
+with `exclude_from_training`); post what turned out to be right to
+`/v1/decisions/<id>/outcome`. Then run, on a schedule:
+
+```bash
+uv run ruling retrain --ledger ledger.sqlite --adapters runs/adapters/tickets --holdout my-holdout.jsonl
+RULING_ADAPTER=runs/adapters/tickets/current uv run ruling serve
+```
+
+Each run trains a new version on the resolved decisions, starting from the one
+being served, and promotes it to `current` only if it beats that one on your
+holdout: lower log loss, no lost accuracy. See
 [Learn from your own traffic](docs/reference.md#learn-from-your-own-traffic).
 
 ## Escalate the doubtful questions to a secondary model
@@ -316,8 +349,9 @@ and the confidence formulas, is in [docs/reference.md](docs/reference.md#how-it-
 - The state is untrusted input: text in it can steer the answers (prompt
   injection), as with any model that reads it. Put independent checks in front
   of security-sensitive actions rather than acting on an answer alone.
-- Images are read through `openai:` vision models only; the local MLX engine
-  reads text. No audio, no generated explanation.
+- Images need a `vision:` model or an `openai:` vision host; the plain MLX
+  path and `vllm:` read text only, and adapters train on text only. No audio,
+  no generated explanation.
 - The native engine is MLX, so the fast path is Apple Silicon. On NVIDIA,
   ruling serves through `vllm:` (vLLM's own decision endpoint) or `openai:`
   against a stock vLLM or llama.cpp; see
@@ -326,8 +360,9 @@ and the confidence formulas, is in [docs/reference.md](docs/reference.md#how-it-
 ## Layout
 
 ```
-ruling/            the package: engine.py (MLX scoring), hosted.py (OpenAI-compatible endpoints),
-                   cascade.py, calibration.py, evals.py, train.py, registry.py, server.py, cli.py, sdk.py
+ruling/            the package: engine.py (MLX scoring), vision.py (images, through mlx-vlm),
+                   hosted.py (OpenAI-compatible endpoints), cascade.py, calibration.py, evals.py,
+                   train.py, retrain.py, ledger.py, registry.py, server.py, cli.py, sdk.py
 sdks/typescript/   zero-dependency JS client with TypeScript types
 datasets/          labeled JSONL fixtures and the record format
 docs/              reference.md (settings, API, clients), measurements.md (the full record),
