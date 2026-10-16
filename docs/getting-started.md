@@ -84,3 +84,20 @@ model. Up to 8 images of 5 MB each, PNG, JPEG or WebP. Any vision model behind
 an OpenAI-compatible server reads them too, through `openai:`; see
 [docs/reference.md](reference.md#api). To teach a `vision:` model your own
 decisions about images, see [Fine-tune on images](fine-tuning.md#fine-tune-on-images).
+
+## Limits
+
+- Probabilities are model scores. Calibration makes them honest on average on
+  data like your calibration set; it does not make any single answer right.
+- A local MLX model answers one request at a time; questions inside a request
+  are batched. Up to `RULING_MAX_PENDING` requests wait their turn, and the
+  next is refused with 429 and a `Retry-After`.
+- The state is untrusted input: text in it can steer the answers (prompt
+  injection), as with any model that reads it. Put independent checks in front
+  of security-sensitive actions rather than acting on an answer alone.
+- Images need a `vision:` model or an `openai:` vision host; the plain MLX
+  path and `vllm:` read text only. No audio, no generated explanation.
+- The native engine is MLX, so the fast path is Apple Silicon. On NVIDIA,
+  ruling serves through `vllm:` (vLLM's own decision endpoint) or `openai:`
+  against a stock vLLM or llama.cpp; see
+  [docs/reference.md](reference.md#on-nvidia-vllm).

@@ -9,7 +9,7 @@ ruling/            the package: engine.py (MLX scoring), vision.py (images, thro
                    train.py, retrain.py, ledger.py, registry.py, server.py, cli.py, sdk.py
 sdks/typescript/   zero-dependency JS client with TypeScript types
 datasets/          labeled JSONL fixtures and the record format
-docs/              getting-started.md, models.md, fine-tuning.md, results.md, how-it-works.md,
+docs/              README.md (the index), getting-started.md, models.md, fine-tuning.md, results.md, how-it-works.md,
                    reference.md (settings, API, clients), measurements.md (the full record),
                    background.md (what Jev is, related work), adapter.md (the model card), development.md
 assets/            figures and the scripts that redraw them from local evaluation runs (runs/, not committed)
