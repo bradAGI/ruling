@@ -200,6 +200,7 @@ rest of `ruling train --help`):
 | `--resume` | Continue from `DIR/checkpoint/`, written at every `--eval-every` step and at the end. Weights, optimizer state and step counter, the position in the batch stream, and the history all come back, so the run finishes with the same weights it would have had uninterrupted. Every setting must match the original run except `--steps`, which may be raised to extend a finished run |
 | `--from-adapter DIR` | Start a fresh run, fresh optimizer and step 0, from an existing adapter's weights. Its `adapter_config.json` must match the requested LoRA layers, rank, scale and dropout |
 | `--max-image-tokens N` | Tokens one image may become when `--model` is a `vision:` model (default 1024); keep it equal to the server's `RULING_MAX_IMAGE_TOKENS` so the adapter sees images as they will be served |
+| `--wandb [PROJECT]` | Mirror every progress line (step, losses, `progress`, `eta_seconds`, and the validation metrics) to a Weights & Biases run in `PROJECT`, or the account's default, opened on the run's config and finished when the run ends, marked failed if it raised. Needs the `wandb` extra: `uv sync --extra wandb` or `pip install 'ruling[wandb]'` |
 
 **Records with images.** With `--model vision:<model>`, records whose states
 hold images train as they are served: the image tokens sit in the prompt, the
@@ -266,7 +267,10 @@ being overconfident. The candidate's temperatures are saved beside its weights
 as `calibration.json`, so `RULING_CALIBRATION=<adapters>/current/calibration.json`
 serves the promoted version calibrated. Every version
 directory keeps its training records, its training log and `retrain.json`,
-the comparison and the reason for the verdict, promoted or not. Until
+the comparison and the reason for the verdict, promoted or not. The server's
+`/history` page lists every version with those verdicts and, from the
+training log, its validation-loss curve and final train and validation
+loss. Until
 `--min-records` decisions (100 by default) have outcomes, a run does nothing.
 `--steps`, `--learning-rate`, `--batch-size`, `--warmup`, `--eval-every`,
 `--valid-fraction` and `--seed` reach the trainer; the LoRA layout always
@@ -354,7 +358,7 @@ Errors come in the hosted API's shape, `{"error": {"code", "message",
 | 422 | `invalid_options` | a well-formed question the model cannot answer: a choice with one option or more than the model reads, or nothing to ask; `param` is `questions.<id>` |
 | 422 | `unsupported_modality` | the state holds images and the selected model reads only text; `param` is `state` |
 | 422 | `context_too_long` | a request over a token limit; `param` is `questions.<id>` when one question is at fault |
-| 422 | `invalid_input` | without `param`: a request the engine refuses, such as one a remote decision server rejects; on the outcome route, `param` is `labels` for a label that does not fit the logged question |
+| 422 | `invalid_input` | without `param`: a request the engine refuses, such as one a remote decision server rejects, or a body sent as `Content-Encoding: gzip` that does not inflate; on the outcome route, `param` is `labels` for a label that does not fit the logged question; on the batch routes, `param` is `rows` for no rows, more than 50,000, or none with labels, and `rows.<i>` for a row an evaluation cannot score |
 | 404 | `unknown_model` | a `model` the server does not answer for; the message lists the names it does |
 | 404 | `unknown_decision` | an outcome for an id the ledger does not hold |
 | 401 | `unauthorized` | an API key is configured and missing or wrong |
@@ -365,6 +369,68 @@ TypeSafe's SDK reads `error.message` from this shape and retries 429 honoring
 `Retry-After`, so both clients and
 [rulesmith](https://github.com/bradAGI/rulesmith), which uses ruling as its
 local judge, behave the same against ruling and the hosted services.
+
+### Batches: `POST /v1/predict` and `POST /v1/evaluations`
+
+Both take `{"model"?, "rows": [...]}`, 1 to 50,000 rows, each in any shape
+`ruling predict` and `ruling eval` read (see [Datasets](#datasets)): a record
+with `state` and `questions`, or a single-question row with `question` and
+`label`, with an optional `id`. A batch holds one of the `RULING_MAX_PENDING`
+slots for its whole duration and is refused with 429 `queue_full` like any
+other request when none is free. The `model` field resolves as it does for a
+decision; an unknown name is 404 `unknown_model`.
+
+`POST /v1/predict` answers every row, labels ignored:
+
+```json
+{
+  "model": "mlx-community/Qwen3.5-4B-4bit",
+  "answers": [
+    {"id": "t-1", "answers": {"team": {"type": "choice", "choice": "billing", "...": "..."}}},
+    {"id": "t-2", "error": {"code": "context_too_long", "message": "..."}}
+  ],
+  "usage": {"input_tokens": 1842, "output_tokens": 0}
+}
+```
+
+`answers` holds one entry per row in the rows' order, each `{"id"?, "answers"}`
+with every answer exactly as `/v1/systemone` returns it, or `{"id"?, "error":
+{"code", "message"}}` for a row the model refuses on its own
+(`context_too_long`, `invalid_options`, `unsupported_modality`, or
+`invalid_input` for a row that is not a valid record), so one bad row never
+fails the batch and entry *i* is always row *i*. `usage.input_tokens` is the
+batch's total.
+
+`POST /v1/evaluations` scores the rows against their labels and returns
+`{"model", ...}` with exactly what `ruling eval` prints, described under
+[Output](#output): `question_types`, `overall`, `by_type` and `by_question`,
+so a client gets accuracy, `nll`, `brier`, `ece`, `mean_confidence` and
+`selective` per type and per question without a dataset on disk. A row too
+long for the model counts as `unscored` in its type's summary; a row the
+model cannot read at all (a one-option choice, images for a text model) is a
+422 with `param` `rows.<i>`, and a batch with no labels at all is 422
+`invalid_input` on `rows`.
+
+### Usage: `GET /v1/usage`
+
+```json
+{"usage": [{"hour": "2026-10-16T14:00:00+00:00", "model": "large", "decisions": 312, "input_tokens": 91044}]}
+```
+
+One bucket per hour and model, sorted by hour then model, since the server
+started: every answered `/v1/systemone` request and every row answered by
+`/v1/predict` or `/v1/evaluations` is one decision, and refused ones count
+nothing. The query parameters `starting_on` and `ending_before` (ISO 8601
+datetimes; a naive one is read as UTC) keep the buckets whose hour starts
+within the window. The counts are kept in memory for the server's lifetime: a
+restart starts them over, and nothing is written to disk.
+
+### Compressed bodies
+
+A POST body may be sent with `Content-Encoding: gzip`; the server inflates it
+before reading it, and a body that does not inflate is 422 `invalid_input`. A
+batch of thousands of rows shrinks several times over, and the Python client
+does this on its own for any body of 64 KB or more.
 
 `GET /v1/models` returns `{"models": [...]}` with the hosted API's `name`,
 `description` and `release_date`, plus `base` (the weights behind the name),
@@ -434,6 +500,53 @@ talks to a server that requires a key. With a ledger, `response.id` and
 `client.outcome(response.id, {"team": "billing"})` report what was right, and
 `system_one(..., exclude_from_training=True)` keeps a decision out of it.
 `client.models()` lists the served models.
+
+Batches go through the same client. `predict` takes rows in any
+[dataset](#datasets) shape and returns one entry per row in order, each
+answer parsed into the same `ChoiceAnswer`, `ScoreAnswer` and `NoulAnswer`
+models a decision returns, and a refused row's `error` left as the server's
+dict; `evaluate` returns the report `ruling eval` prints; `usage` the hourly
+buckets:
+
+```python
+from datetime import datetime, timedelta
+
+rows = [{"id": t.id, "state": t.body, "questions": questions, "labels": {"team": t.team}} for t in tickets]
+
+for row in client.predict(rows):                        # labels ignored
+    if "error" in row:
+        print(row["id"], row["error"]["code"])
+    else:
+        print(row["id"], row["answers"]["team"].choice)
+
+report = client.evaluate(rows)                           # labels scored
+print(report["overall"]["accuracy"], report["by_question"]["team"]["selective"]["0.9"])
+
+for bucket in client.usage(starting_on=datetime.now() - timedelta(days=1)):
+    print(bucket["hour"], bucket["model"], bucket["decisions"], bucket["input_tokens"])
+```
+
+Images go into a state as the wire dict `/v1/systemone` reads; `Image` builds
+one from a file (`.png`, `.jpg`, `.jpeg` or `.webp`; anything else raises
+`ValueError`) or from bytes and a media type, checking the size limit the
+server enforces:
+
+```python
+from ruling import Image
+
+response = client.system_one(
+    state={"receipt": Image.from_path("receipt.jpg"), "claimed": 42.10},
+    questions={"matches": Noul(instructions="The total in <image 1> is the claimed amount.")},
+)
+```
+
+A refused request raises `RulingError`, carrying the server's `status`,
+`code`, `message` and `param`. A full queue (429), an absent upstream (503)
+and a connection failure are tried again first: `RetryPolicy(max_retries=2,
+backoff_initial=0.5, backoff_max=5.0)` is the default, waiting the server's
+`Retry-After` when it sends one and otherwise doubling from half a second;
+`RulingClient(retry=RetryPolicy(max_retries=0))` turns retries off. Bodies of
+64 KB or more are sent gzipped; `RulingClient(gzip=False)` sends them plain.
 
 TypeScript and JavaScript, zero dependencies, in [`sdks/typescript`](../sdks/typescript):
 
@@ -509,6 +622,11 @@ cannot answer, so line *i* is always row *i*. Each line is written as it is
 answered; run the same command again after an interruption and it carries on
 after the last line. It takes the same `--model`, `--adapter`, `--calibration`
 and `--rotations` as `ruling eval`.
+
+Against a running server, [`POST /v1/predict`](#batches-post-v1predict-and-post-v1evaluations)
+answers the same rows with the same per-row entries in one request, and
+`POST /v1/evaluations` scores them; `client.predict(rows)` and
+`client.evaluate(rows)` in the [Python client](#clients) call them.
 
 To turn a strong model's answers into training targets for a small one, use
 `ruling build-corpus answers --questions ROWS --writer MODEL` instead: it keeps

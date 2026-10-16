@@ -27,6 +27,13 @@ MAX_QUESTIONS = 64
 MAX_IMAGES = 8
 MAX_IMAGE_BYTES = 5 * 2**20
 IMAGE_REFERENCE = "<image {}>"
+ImageMediaType = Literal["image/png", "image/jpeg", "image/webp"]
+IMAGE_SUFFIXES = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".webp": "image/webp"}
+"""The media type an image file's suffix implies, for clients reading images off disk."""
+
+MAX_PREDICT_ROWS = 50_000
+"""Rows one `/v1/predict` or `/v1/evaluations` request may carry. A batch holds one admission slot
+for its whole duration, so the limit bounds how long one client can keep a slot."""
 
 # The hosted SDK sends its default model name on every request. Treating these as
 # "whichever model this server loaded" is what lets that client talk to ruling
@@ -110,7 +117,7 @@ def question_statement(question: Question) -> str:
 
 class Image(Strict):
     type: Literal["image"]
-    media_type: Literal["image/png", "image/jpeg", "image/webp"]
+    media_type: ImageMediaType
     data: str
 
     @field_validator("data")

@@ -3,14 +3,13 @@ import shutil
 import subprocess
 from pathlib import Path
 
-import httpx
 import pytest
 from fastapi.testclient import TestClient
 
-from ruling.evals import load_dataset
+from ruling.evals import Record, as_record, collect, load_dataset, report
 from ruling.ledger import DecisionLedger
 from ruling.questions import Choice, Noul
-from ruling.sdk import RulingClient
+from ruling.sdk import RulingClient, RulingError
 from ruling.registry import Registry
 from ruling.server import create_app
 
@@ -118,9 +117,9 @@ def test_python_sdk_authenticates_with_the_servers_key(live_server_with_key, mon
     with RulingClient(base_url=live_server_with_key) as client:
         assert client.models()
     monkeypatch.delenv("RULING_API_KEY")
-    with RulingClient(base_url=live_server_with_key) as client, pytest.raises(httpx.HTTPStatusError) as refused:
+    with RulingClient(base_url=live_server_with_key) as client, pytest.raises(RulingError) as refused:
         client.models()
-    assert refused.value.response.status_code == 401
+    assert (refused.value.status, refused.value.code) == (401, "unauthorized")
 
 
 def test_typescript_sdk_against_live_server(live_server):
@@ -199,12 +198,12 @@ def test_a_logged_decision_takes_its_outcome_and_exports_as_training_data(engine
             assert client.outcome(decision, {"refund": True}) == {"refund": True}
             assert client.system_one(state="A benchmark row.", questions={"refund": Noul(instructions="A refund.")},
                                      exclude_from_training=True).id is None
-            with pytest.raises(httpx.HTTPStatusError) as wrong:
+            with pytest.raises(RulingError) as wrong:
                 client.outcome(decision, {"refund": "maybe"})
-            assert wrong.value.response.json()["error"]["code"] == "invalid_input"
-            with pytest.raises(httpx.HTTPStatusError) as missing:
+            assert (wrong.value.code, wrong.value.param) == ("invalid_input", "labels")
+            with pytest.raises(RulingError) as missing:
                 client.outcome("no-such-id", {"refund": True})
-            assert missing.value.response.json()["error"]["code"] == "unknown_decision"
+            assert missing.value.code == "unknown_decision"
     finally:
         server.should_exit = True
         thread.join(timeout=10)
@@ -223,6 +222,42 @@ def test_a_decision_kept_out_of_training_is_answered_but_not_logged(engine, tmp_
         logged = client.post("/v1/systemone", json=PAYLOAD).json()
     assert excluded["answers"] and "id" not in excluded
     assert logged["id"]
+
+
+WORDY = {"id": "wordy", "state": " ".join(f"w{i}" for i in range(40000)),
+         "questions": {"refund": PAYLOAD["questions"]["refund"]}, "labels": {"refund": True}}
+
+
+def test_python_sdk_answers_a_batch_with_a_row_too_long_for_the_model_kept_in_place(live_server, engine):
+    rows = [{"id": "dup", **PAYLOAD, "labels": {"team": "billing", "refund": True}},
+            WORDY,
+            {"id": "one", "state": "Thanks, that fixed it.", "question": PAYLOAD["questions"]["refund"], "label": False}]
+    with RulingClient(base_url=live_server) as client:
+        answered = client.predict(rows)
+        usage = client.usage()
+    assert [row["id"] for row in answered] == ["dup", "wordy", "one"]
+    assert answered[0]["answers"]["team"].choice == "billing" and answered[0]["answers"]["refund"].noul > 0.5
+    assert answered[1]["error"]["code"] == "context_too_long" and "answers" not in answered[1]
+    assert answered[2]["answers"]["decision"].noul < answered[0]["answers"]["refund"].noul
+    assert sum(b["decisions"] for b in usage if b["model"] == engine.model_id) >= 2
+
+
+def test_python_sdk_evaluates_labeled_rows_against_the_live_model(live_server, engine):
+    rows = [{**PAYLOAD, "labels": {"team": "billing", "refund": True}},
+            WORDY,
+            {"state": "Thanks, that fixed it.", "question": PAYLOAD["questions"]["refund"], "label": False}]
+    with RulingClient(base_url=live_server) as client:
+        scored = client.evaluate(rows)
+        with pytest.raises(RulingError) as unlabeled:
+            client.evaluate([{k: PAYLOAD[k] for k in ("state", "questions")}])
+    assert scored.pop("model") == engine.model_id
+    # The same rows scored in-process, as `ruling eval` would: the route must report exactly that, wall time aside.
+    local = report(collect(engine, [Record.model_validate(as_record(row)) for row in rows]), engine.calibration)
+    assert scored.pop("latency_ms")["records"] == local.pop("latency_ms")["records"] == 2
+    assert scored == local
+    assert scored["overall"]["n"] == 3 and set(scored["by_question"]) == {"team", "refund", "decision"}
+    assert scored["question_types"]["noul"]["unscored"] == 1 and scored["question_types"]["noul"]["count"] == 2
+    assert (unlabeled.value.status, unlabeled.value.code, unlabeled.value.param) == (422, "invalid_input", "rows")
 
 
 def test_without_a_ledger_the_wire_format_is_unchanged(app):

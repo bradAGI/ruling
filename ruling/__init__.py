@@ -10,14 +10,17 @@ from ruling.questions import (
     SystemOneRequest,
     SystemOneResponse,
 )
-from ruling.sdk import RulingClient
+from ruling.sdk import Image, RetryPolicy, RulingClient, RulingError
 
 __all__ = [
     "Choice",
     "ChoiceAnswer",
+    "Image",
     "Noul",
     "NoulAnswer",
+    "RetryPolicy",
     "RulingClient",
+    "RulingError",
     "Score",
     "ScoreAnswer",
     "SystemOneRequest",
