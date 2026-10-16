@@ -56,7 +56,7 @@ def checkpoint(tmp_path_factory):
     data = root / "access.jsonl"
     write([r.model_dump(mode="json") for r in states.generate(6000, seed=5) if r.family == "state_access"], data)
     config = DecisionTrainConfig(base=BASE[0], revision=BASE[1], data=[data], holdout=[], output=root / "model", valid_fraction=0.15,
-                                 steps=200, learning_rate=5e-5, warmup=20, eval_every=100, valid_records=200)
+                                 steps=300, learning_rate=5e-5, warmup=20, eval_every=100, valid_records=200)
     history = DecisionTrainer(config).run(log=lambda _: None)
     return config.output, history
 
@@ -71,10 +71,12 @@ def test_training_stays_inside_the_configured_memory_ceiling(checkpoint):
 def test_training_learns_a_policy_the_untrained_head_cannot_answer(checkpoint):
     """The claim is the move, not a peak.
 
-    Two hundred steps on this fixture have landed anywhere from 0.79 to above
-    0.95 across runs at a fixed seed, because MLX kernels are not bitwise
-    deterministic. An absolute threshold tests the draw; the improvement over
-    the untrained head, and a loss that falls several-fold, test the training.
+    MLX kernels are not bitwise deterministic, so runs at a fixed seed differ:
+    at two hundred steps this fixture landed anywhere from 0.7475 to 1.0, and
+    the bar below caught the draw rather than the training. At three hundred
+    steps three runs ended at 1.0, so the bar now sits well under the floor;
+    the improvement over the untrained head, and a loss that falls
+    several-fold, are what test the training.
     """
     _, history = checkpoint
     assert history[0]["accuracy"] < 0.6
