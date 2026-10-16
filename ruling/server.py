@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import gzip
 import logging
+from importlib.metadata import version
 import math
 import threading
 import time
@@ -212,7 +213,7 @@ def labeled_records(engine, rows: list[Any]) -> list[Record]:
 
 def create_app(registry: Registry, api_key: str | None, max_pending: int,
                ledger: DecisionLedger | None = None, usage: UsageMeter | None = None) -> FastAPI:
-    app = FastAPI(title="ruling", version="0.2.0")
+    app = FastAPI(title="ruling", version=version("ruling"))
     app.add_middleware(GzipRequests)
     bearer = HTTPBearer(auto_error=False)
     admission = Admission(max_pending)
