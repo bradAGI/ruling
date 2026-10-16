@@ -50,7 +50,8 @@ from ruling.calibration import Calibration, coverage_at_error, expected_calibrat
 from ruling.engine import Engine, option_logits
 from ruling.evals import TARGET, Record, label_index, load_dataset
 from ruling.prompt import render_question
-from ruling.questions import Choice, Noul, Score, option_keys, render_text
+from ruling.questions import Choice, Noul, Score, option_keys, render_text, state_images
+from ruling.vision import VISION_PREFIX, VisionEngine
 
 
 @dataclass(frozen=True)
@@ -79,6 +80,8 @@ class TrainConfig:
     ranking_weight: float = 0.0
     ranking_margin: float = 0.05
     from_adapter: Path | None = None
+    max_image_tokens: int = 1024
+    """Tokens one image may become on a `vision:` model; keep it equal to the server's RULING_MAX_IMAGE_TOKENS."""
 
 
 CHECKPOINT = "checkpoint"
@@ -260,6 +263,9 @@ class Trainer:
         overlap = holdout_overlap(records, held_out)
         if overlap:
             raise ValueError(f"{overlap} training states also appear in held-out evaluation data")
+        if not config.model.startswith(VISION_PREFIX) and any(state_images(r.state) for r in records):
+            raise ValueError(f"the records hold images and {config.model} reads text only; "
+                             f"train a {VISION_PREFIX} model on them")
         self.train_records, self.valid_records = split_records(records, config.valid_fraction)
 
         self.lora = {"rank": config.lora_rank, "scale": config.lora_scale, "dropout": config.lora_dropout}
@@ -267,7 +273,10 @@ class Trainer:
             self._check_adapter(config.from_adapter)
 
         mx.random.seed(config.seed)
-        self.engine = Engine(config.model, Calibration(), config.max_tokens, rotations=1, prior_debias=False)
+        if config.model.startswith(VISION_PREFIX):
+            self.engine = VisionEngine(config.model, Calibration(), config.max_tokens, 1, False, config.max_image_tokens)
+        else:
+            self.engine = Engine(config.model, Calibration(), config.max_tokens, rotations=1, prior_debias=False)
         model = self.engine.model
         model.freeze()
         linear_to_lora_layers(model, config.lora_layers, self.lora)
@@ -302,37 +311,71 @@ class Trainer:
                     examples.append(Example(index, qid, record.weight))
         return examples
 
-    def _render(self, records: list[Record], example: Example, augment: bool) -> tuple[list[int], list[float], float] | None:
+    def _render(self, records: list[Record], example: Example, augment: bool):
+        """The example's tokens, its target over the presented options, its weight, and its state when the
+        state holds images (read again when its batch runs, so a chunk of batches never holds their pixels)."""
         record = records[example.record]
         question = record.questions[example.question_id]
         presented, rotation = permuted(question, self.rng) if augment else (question, 0)
         rendered = render_question(presented, self.engine.codes.codes, rotation)
-        prefix, tail = self.engine.split_prompt(record.state)
-        tokens = self.engine._encode(prefix) + self.engine._encode(rendered.text + tail)
+        prefix = self.engine._prefix(record.state)
+        tokens = prefix.tokens + self.engine._encode(rendered.text + prefix.tail)
         if len(tokens) > self.config.max_tokens:
             return None
         target = target_vector(record, example.question_id)
-        return tokens, [target[key] for key in rendered.keys], example.weight
+        seen = record.state if prefix.vision_inputs is not None else None
+        return tokens, [target[key] for key in rendered.keys], example.weight, seen
 
-    def _batch(self, rendered: list[tuple[list[int], list[float], float]]):
-        width = math.ceil(max(len(t) for t, _, _ in rendered) / 32) * 32
-        options = max(len(target) for _, target, _ in rendered)
+    def _batch(self, rendered: list[tuple[list[int], list[float], float, object]]):
+        width = math.ceil(max(len(t) for t, _, _, _ in rendered) / 32) * 32
+        options = max(len(target) for _, target, _, _ in rendered)
         pad = self.engine._pad_id
-        tokens = mx.array([t + [pad] * (width - len(t)) for t, _, _ in rendered])
-        last = mx.array([len(t) - 1 for t, _, _ in rendered])
+        tokens = mx.array([t + [pad] * (width - len(t)) for t, _, _, _ in rendered])
+        last = mx.array([len(t) - 1 for t, _, _, _ in rendered])
         ids = mx.array([self.engine.codes.token_ids[:options] for _ in rendered])
-        mask = mx.array([[i < len(target) for i in range(options)] for _, target, _ in rendered])
-        targets = mx.array([target + [0.0] * (options - len(target)) for _, target, _ in rendered], dtype=mx.float32)
-        weights = mx.array([weight for _, _, weight in rendered], dtype=mx.float32)
-        return tokens, last, ids, mask, targets, weights
+        mask = mx.array([[i < len(target) for i in range(options)] for _, target, _, _ in rendered])
+        targets = mx.array([target + [0.0] * (options - len(target)) for _, target, _, _ in rendered], dtype=mx.float32)
+        weights = mx.array([weight for _, _, weight, _ in rendered], dtype=mx.float32)
+        return tokens, last, ids, mask, targets, weights, [seen for _, _, _, seen in rendered]
+
+    def _vision(self, tokens: mx.array, last: mx.array, states: list) -> tuple[mx.array | None, mx.array | None]:
+        """Input embeddings with each row's image features in place, and every row's multimodal positions, on a
+        vision model; (None, None) on a text model. A batch without images keeps its token embeddings. The vision
+        tower is frozen: nothing here takes a gradient."""
+        if not self.engine.reads_images:
+            return None, None
+        width = tokens.shape[1]
+        positions = mx.broadcast_to(mx.arange(width)[None, None, :], (3, tokens.shape[0], width))
+        if all(state is None for state in states):
+            # A vision model's attention takes explicit positions whenever no cache supplies them.
+            return None, positions
+        vlm = self.engine.vlm
+        embeds = vlm.language_model.model.embed_tokens(tokens)
+        rows, places = [], []
+        for row, state in enumerate(states):
+            if state is None:
+                rows.append(embeds[row])
+                places.append(positions[:, row])
+                continue
+            length = int(last[row]) + 1
+            images = self.engine._prefix(state).vision_inputs
+            ids = tokens[row:row + 1, :length]
+            features = vlm.get_input_embeddings(ids, images["pixel_values"], image_grid_thw=images["image_grid_thw"],
+                                                mask=mx.ones(ids.shape, dtype=mx.int32))
+            # Padding sits after the last real token, so its embeddings and positions are never read.
+            rows.append(mx.concatenate([features.inputs_embeds[0], embeds[row, length:]], axis=0))
+            row_positions = features.position_ids[:, 0]
+            tail = row_positions.max() + 1 + mx.arange(width - length)
+            places.append(mx.concatenate([row_positions, mx.broadcast_to(tail[None], (3, width - length))], axis=1))
+        return mx.stop_gradient(mx.stack(rows)), mx.stack(places, axis=1)
 
     @staticmethod
-    def _log_probs(model, tokens, last, ids, mask):
-        logits = mx.where(mask, option_logits(model, tokens, None, last, ids), -mx.inf)
+    def _log_probs(model, tokens, last, ids, mask, embeds=None, positions=None):
+        logits = mx.where(mask, option_logits(model, tokens, None, last, ids, positions, embeds), -mx.inf)
         return logits - mx.logsumexp(logits, axis=-1, keepdims=True)
 
-    def loss(self, model, tokens, last, ids, mask, targets, weights):
-        log_probs = self._log_probs(model, tokens, last, ids, mask)
+    def loss(self, model, tokens, last, ids, mask, targets, weights, embeds=None, positions=None):
+        log_probs = self._log_probs(model, tokens, last, ids, mask, embeds, positions)
         config = self.config
         return objective(log_probs, mask, targets, config.label_smoothing, config.brier_weight,
                          config.ranking_weight, config.ranking_margin, weights)
@@ -350,12 +393,12 @@ class Trainer:
         rendered.sort(key=lambda c: len(c[0]))
         for start in range(0, len(rendered), size):
             group = rendered[start:start + size]
-            tokens, last, ids, mask, targets, _ = self._batch(group)
-            log_probs = self._log_probs(model, tokens, last, ids, mask)
+            tokens, last, ids, mask, targets, _, states = self._batch(group)
+            log_probs = self._log_probs(model, tokens, last, ids, mask, *self._vision(tokens, last, states))
             ce = -mx.where(mask, targets * log_probs, 0.0).sum(axis=-1)
             mx.eval(ce, log_probs)
             probs = np.exp(np.where(np.array(mask), np.array(log_probs), -np.inf))
-            for row, (_, target, _), loss in zip(probs, group, np.array(ce)):
+            for row, (_, target, _, _), loss in zip(probs, group, np.array(ce)):
                 row = row[: len(target)]
                 losses.append(float(loss))
                 top.append(float(row.max()))
@@ -411,8 +454,8 @@ class Trainer:
         for step in range(first, config.steps + 1):
             # Dropout draws from a per-step key, so a resumed run masks exactly as the uninterrupted one would.
             mx.random.seed(int(np.random.SeedSequence((config.seed, step)).generate_state(1)[0]))
-            tokens, last, ids, mask, targets, weights = next(batches)
-            loss, grads = step_fn(model, tokens, last, ids, mask, targets, weights)
+            tokens, last, ids, mask, targets, weights, states = next(batches)
+            loss, grads = step_fn(model, tokens, last, ids, mask, targets, weights, *self._vision(tokens, last, states))
             grads, _ = optim.clip_grad_norm(grads, config.max_grad_norm)
             optimizer.update(model, grads)
             mx.eval(model.trainable_parameters(), optimizer.state, loss)

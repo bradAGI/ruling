@@ -51,11 +51,6 @@ class VisionEngine(Engine):
         images.min_pixels = min(images.min_pixels, images.max_pixels)
         return self.vlm.language_model, self.processor.tokenizer
 
-    def variant(self, adapter, calibration: Calibration) -> "VisionEngine":
-        if adapter is not None:
-            raise ValueError(f"{self.model_id} takes no adapter: LoRA training reads text only")
-        return super().variant(adapter, calibration)
-
     def _user_content(self, state: State, rendered_state: str) -> str | list[dict]:
         images = state_images(state)
         if not images:

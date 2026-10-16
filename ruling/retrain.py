@@ -16,15 +16,17 @@ from __future__ import annotations
 import json
 import os
 import re
+from dataclasses import replace
 from pathlib import Path
 
 import mlx.core as mx
 
 from ruling.calibration import Calibration
 from ruling.config import Settings
-from ruling.engine import ADAPTER_CONFIG, Engine
+from ruling.engine import ADAPTER_CONFIG
 from ruling.evals import Record, collect, decision_blocks, load_dataset
 from ruling.ledger import DecisionLedger
+from ruling.registry import build_engine
 from ruling.train import Trainer, TrainConfig, _state_key
 
 CURRENT = "current"
@@ -81,12 +83,12 @@ def retrain(ledger: DecisionLedger, adapters: Path, model: str, holdout: list[Pa
     data = version / DECISIONS
     data.write_text("".join(r.model_dump_json(exclude_none=True) + "\n" for r in records))
     Trainer(TrainConfig(model=model, data=[data], output=version, holdout=holdout, from_adapter=start,
-                        **_lora_layout(start), **train_options)).run(log)
+                        max_image_tokens=settings.max_image_tokens, **_lora_layout(start), **train_options)).run(log)
     # The trainer's copy of the model is unreachable now; return its memory before loading the scorer's.
     mx.clear_cache()
 
-    served = Engine(model, Calibration(), settings.max_input_tokens, settings.rotations, settings.prior_debias,
-                    start, settings.max_branch_tokens)
+    served = build_engine(replace(settings, model=model, adapter_path=start, calibration_path=None, cascade_to=None,
+                                  failover_to=None))
     candidate = served.variant(version, Calibration())
     scores = {name: decision_blocks(collect(engine, held_out), Calibration())["overall"]
               for name, engine in (("current", served), ("candidate", candidate))}

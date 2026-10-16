@@ -122,11 +122,12 @@ def build_engine(settings: Settings):
         return OpenRouterEngine(settings.model, calibration, settings.rotations, list(settings.openrouter_providers),
                                 Budget(settings.openrouter_budget_usd))
     if settings.model.startswith(VISION_PREFIX):
-        if settings.adapter_path:
-            raise ValueError(f"{settings.model} takes no adapter: LoRA training reads text only")
         from ruling.vision import VisionEngine
-        return VisionEngine(settings.model, calibration, settings.max_input_tokens, settings.rotations,
-                            settings.prior_debias, settings.max_image_tokens, settings.max_branch_tokens)
+        vision = VisionEngine(settings.model, Calibration() if settings.adapter_path else calibration,
+                              settings.max_input_tokens, settings.rotations, settings.prior_debias,
+                              settings.max_image_tokens, settings.max_branch_tokens)
+        # The adapter goes onto the loaded language half, as for any variant sharing a base.
+        return vision.variant(settings.adapter_path, calibration) if settings.adapter_path else vision
     if is_checkpoint(settings.model):
         return DecisionEngine(Path(settings.model), calibration, settings.max_input_tokens)
     return Engine(settings.model, calibration, settings.max_input_tokens, settings.rotations, settings.prior_debias,

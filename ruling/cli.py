@@ -108,7 +108,8 @@ def main(argv: list[str] | None = None) -> None:
     for name, kind in (("valid-fraction", float), ("steps", int), ("batch-size", int), ("learning-rate", float), ("max-grad-norm", float),
                        ("warmup", int), ("lora-layers", int), ("lora-rank", int), ("lora-scale", float),
                        ("lora-dropout", float), ("max-tokens", int), ("eval-every", int), ("valid-examples", int), ("seed", int),
-                       ("label-smoothing", float), ("brier-weight", float), ("ranking-weight", float), ("ranking-margin", float)):
+                       ("label-smoothing", float), ("brier-weight", float), ("ranking-weight", float), ("ranking-margin", float),
+                       ("max-image-tokens", int)):
         train.add_argument(f"--{name}", type=kind)
     train.add_argument("--no-grad-checkpoint", dest="grad_checkpoint", action="store_false",
                        help="keep all activations; faster but needs far more memory")
@@ -241,7 +242,7 @@ def main(argv: list[str] | None = None) -> None:
         options = {name.replace("-", "_"): getattr(args, name.replace("-", "_"))
                    for name in ("valid-fraction", "steps", "batch-size", "learning-rate", "max-grad-norm", "warmup", "lora-layers", "lora-rank",
                                 "lora-scale", "lora-dropout", "max-tokens", "eval-every", "valid-examples", "seed",
-                                "label-smoothing", "brier-weight", "ranking-weight", "ranking-margin")}
+                                "label-smoothing", "brier-weight", "ranking-weight", "ranking-margin", "max-image-tokens")}
         config = TrainConfig(model=args.model or Settings.from_env().model, data=args.data, output=args.output,
                              holdout=args.holdout, grad_checkpoint=args.grad_checkpoint, from_adapter=args.from_adapter,
                              **{k: v for k, v in options.items() if v is not None})

@@ -187,7 +187,7 @@ tests pass on Linux, `ruling eval` scored authored144 at three orderings in
 ## Training
 
 `ruling train --data RECORDS... --output DIR` LoRA-fine-tunes the answer
-readout; the README walks through a run and [docs/adapter.md](adapter.md)
+readout; [Fine-tuning](fine-tuning.md) walks through a run and [docs/adapter.md](adapter.md)
 describes the adapter it produces. Beyond the hyperparameters (`--steps`,
 `--learning-rate`, `--lora-layers`, `--lora-rank`, `--lora-scale`, and the
 rest of `ruling train --help`):
@@ -196,6 +196,17 @@ rest of `ruling train --help`):
 |---|---|
 | `--resume` | Continue from `DIR/checkpoint/`, written at every `--eval-every` step and at the end. Weights, optimizer state and step counter, the position in the batch stream, and the history all come back, so the run finishes with the same weights it would have had uninterrupted. Every setting must match the original run except `--steps`, which may be raised to extend a finished run |
 | `--from-adapter DIR` | Start a fresh run, fresh optimizer and step 0, from an existing adapter's weights. Its `adapter_config.json` must match the requested LoRA layers, rank, scale and dropout |
+| `--max-image-tokens N` | Tokens one image may become when `--model` is a `vision:` model (default 1024); keep it equal to the server's `RULING_MAX_IMAGE_TOKENS` so the adapter sees images as they will be served |
+
+**Records with images.** With `--model vision:<model>`, records whose states
+hold images train as they are served: the image tokens sit in the prompt, the
+vision tower stays frozen, and LoRA trains the language layers that read
+them. Raise `--max-tokens` to fit them; at the default 1,024 tokens per image
+the default `--max-tokens` of 1,024 leaves no room for the question. A text
+model refuses records with images rather than training on their text alone.
+Measured on the 0.8B test model, teaching an arbitrary code for each of three
+colors took 300 steps at a learning rate of 3e-5 to bring the validation loss
+from 2.3 to 0.4; far fewer steps, or higher rates, left it at chance.
 
 The top-level adapter files in `DIR` are always the best validation loss so
 far; `DIR/checkpoint/` is the latest step. Serve the former.
@@ -294,7 +305,8 @@ themselves under those names, so a question can say "the receipt in
   The state and its images are encoded once and every question is scored
   against them, as for text. Eight 12-megapixel photos with nine questions
   took 10 s and 7.2 GB at peak on the 4B model, every color question right.
-  A `vision:` model takes no adapter: training reads text only.
+  A `vision:` model serves an adapter like any other model, and trains on
+  records whose states hold images; see [Training](#training).
 - **Any vision model behind an OpenAI-compatible server** (vLLM, SGLang,
   `mlx_vlm.server`): `openai:` models get the images as content parts.
 - **`typesafe:`** forwards the state unchanged; the remote service decides.

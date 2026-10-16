@@ -61,8 +61,7 @@ Open `http://127.0.0.1:8010/` for the playground. The rest is in
   injection), as with any model that reads it. Put independent checks in front
   of security-sensitive actions rather than acting on an answer alone.
 - Images need a `vision:` model or an `openai:` vision host; the plain MLX
-  path and `vllm:` read text only, and adapters train on text only. No audio,
-  no generated explanation.
+  path and `vllm:` read text only. No audio, no generated explanation.
 - The native engine is MLX, so the fast path is Apple Silicon. On NVIDIA,
   ruling serves through `vllm:` (vLLM's own decision endpoint) or `openai:`
   against a stock vLLM or llama.cpp; see

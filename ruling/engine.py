@@ -171,7 +171,7 @@ def answer(question: Choice | Score | Noul, raw: RawScore, calibration: Calibrat
 
 
 def option_logits(model, tokens: mx.array, cache, last: mx.array, option_ids: mx.array,
-                  position_ids: mx.array | None = None) -> mx.array:
+                  position_ids: mx.array | None = None, inputs_embeds: mx.array | None = None) -> mx.array:
     """Logits for each row's answer codes at its last real position, shape [batch, options].
 
     Only the hidden state at the answer position goes through the output head,
@@ -181,8 +181,11 @@ def option_logits(model, tokens: mx.array, cache, last: mx.array, option_ids: mx
     or tied input embeddings.
     """
     text = getattr(model, "language_model", model)
-    # Multimodal positions are passed only when images moved them; text-only models take none.
-    hidden = text.model(tokens, cache=cache, **({} if position_ids is None else {"position_ids": position_ids}))
+    # Embeddings with image features and the positions images moved are passed only when there are images;
+    # text-only models take neither.
+    extra = {key: value for key, value in (("position_ids", position_ids), ("inputs_embeds", inputs_embeds))
+             if value is not None}
+    hidden = text.model(tokens, cache=cache, **extra)
     picked = hidden[mx.arange(tokens.shape[0]), last]
     tied = getattr(text, "tie_word_embeddings", None)
     if tied is None:

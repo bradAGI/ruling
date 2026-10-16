@@ -88,7 +88,9 @@ def test_batches_carry_one_weight_per_row():
     from ruling.train import Trainer
 
     stub = SimpleNamespace(engine=SimpleNamespace(_pad_id=0, codes=SimpleNamespace(token_ids=[11, 12, 13])))
-    tokens, last, ids, mask, targets, weights = Trainer._batch(stub, [([5, 6], [1.0, 0.0], 0.5), ([7], [0.0, 0.0, 1.0], 2.0)])
+    tokens, last, ids, mask, targets, weights, states = Trainer._batch(
+        stub, [([5, 6], [1.0, 0.0], 0.5, None), ([7], [0.0, 0.0, 1.0], 2.0, {"photo": "seen"})])
+    assert states == [None, {"photo": "seen"}]
     assert weights.tolist() == [0.5, 2.0] and weights.dtype == mx.float32
     assert targets.tolist() == [[1.0, 0.0, 0.0], [0.0, 0.0, 1.0]] and mask.tolist() == [[True, True, False], [True, True, True]]
 
