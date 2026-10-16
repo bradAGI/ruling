@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import argparse
 import dataclasses
+import io
 import json
 import logging
+import sys
 from pathlib import Path
 
 import numpy as np
@@ -162,6 +164,9 @@ def main(argv: list[str] | None = None) -> None:
 
     args = parser.parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(message)s")
+    # Progress lines are read from log files while a run is going; block buffering would hold them back.
+    if isinstance(sys.stdout, io.TextIOWrapper):
+        sys.stdout.reconfigure(line_buffering=True)
     configure_memory(Settings.from_env())
 
     if args.command == "serve":
