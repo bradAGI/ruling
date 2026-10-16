@@ -82,4 +82,5 @@ The state and its images are read once, however many questions you ask:
 eight 12-megapixel photos and nine questions took 10 s and 7.2 GB on the 4B
 model. Up to 8 images of 5 MB each, PNG, JPEG or WebP. Any vision model behind
 an OpenAI-compatible server reads them too, through `openai:`; see
-[docs/reference.md](reference.md#api).
+[docs/reference.md](reference.md#api). To teach a `vision:` model your own
+decisions about images, see [Fine-tune on images](fine-tuning.md#fine-tune-on-images).

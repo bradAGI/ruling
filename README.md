@@ -20,7 +20,7 @@ with no training gets 231 right to Jev's 238 — not a significant difference
 |---|---|
 | [Getting started](docs/getting-started.md) | Install, the first request, the playground and clients, asking about images |
 | [Choosing models](docs/models.md) | The primary model, serving several from one process, escalating doubtful questions to a secondary |
-| [Fine-tuning](docs/fine-tuning.md) | Training an adapter on your own decisions, and retraining from production outcomes |
+| [Fine-tuning](docs/fine-tuning.md) | Training an adapter on your own decisions, images included, and retraining from production outcomes |
 | [Results](docs/results.md) | Accuracy and coverage against Jev and the open decision models, and where Jev leads |
 | [How it works](docs/how-it-works.md) | One prefix, many suffixes; reading logits instead of sampling; confidence |
 | [Reference](docs/reference.md) | Every setting, model prefix, API route, error code and client |

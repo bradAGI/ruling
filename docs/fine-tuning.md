@@ -59,6 +59,44 @@ roughly halved, and confident errors (wrong while reporting p ≥ 0.9) fell
 three- to thirteen-fold. Full card and reproduction in
 [docs/adapter.md](adapter.md).
 
+## Fine-tune on images
+
+Records can carry images in their state, in the same
+`{"type": "image", "media_type", "data"}` objects a request takes. Train them
+on a `vision:` base and serve the adapter on the same base:
+
+```json
+{"state": {"note": "Customer says order 4471 was charged twice.",
+           "receipt": {"type": "image", "media_type": "image/png", "data": "<base64>"}},
+ "questions": {"same_order": {"type": "noul", "instructions": "The order number on <image 1> is the one in the note."}},
+ "labels": {"same_order": true}}
+```
+
+```bash
+uv sync --extra vision
+uv run ruling train --data my-image-decisions.jsonl --holdout my-holdout.jsonl \
+  --model vision:mlx-community/Qwen3.5-4B-4bit --max-tokens 2048 --max-image-tokens 1024 \
+  --output runs/adapters/receipts
+RULING_MODEL=vision:mlx-community/Qwen3.5-4B-4bit RULING_ADAPTER=runs/adapters/receipts uv run ruling serve
+```
+
+Each image is read into the prompt exactly as the server reads it; the vision
+tower stays frozen and LoRA trains the language layers that read its
+features. Records without images can sit in the same file. Keep
+`--max-image-tokens` equal to the server's `RULING_MAX_IMAGE_TOKENS`, so the
+adapter sees images at the size it will be served them, and raise
+`--max-tokens` to fit the image and the question: an example longer than it
+is skipped. A text model refuses records with images rather than training
+on their text alone.
+
+Expect it to be slow and to need steps. The vision models are Qwen3.5, whose
+hybrid attention trains 15 to 30 times slower in MLX than a pure-attention
+model, and every image adds up to `--max-image-tokens` tokens to its example.
+On the 0.8B test model, teaching an arbitrary code for each of three colors,
+which only the picture shows, took 300 steps at a learning rate of 3e-5 to
+bring the validation loss from 2.3 to 0.4; fewer steps, or higher rates, left
+it at chance. We have not yet measured a gain on real photos.
+
 ## Keep learning from production
 
 Set `RULING_LEDGER=ledger.sqlite` and
@@ -76,4 +114,5 @@ being served, and promotes it to `current` only if it beats that one on your
 holdout: lower log loss, no lost accuracy. The server's `/history` page,
 linked from the playground, lists every run: the held-out scores of both
 versions, and why each was or was not promoted. See
-[Learn from your own traffic](reference.md#learn-from-your-own-traffic).
+[Learn from your own traffic](reference.md#learn-from-your-own-traffic). A
+`vision:` model retrains the same way, from decisions about images.
