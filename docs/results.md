@@ -65,6 +65,18 @@ of JevBench's 111 hard items to Clef-flash's 67. pplx-decider, at 15 GB, is
 ahead of both on every set here except TypeSafe's, where it cannot read the
 13 rows over 8,192 tokens; it gets 86 of the 111 hard items.
 
+## Images
+
+On [Glance](https://github.com/yoheinakajima/glance)'s three sets of photos
+taken after the models were released, `vision:mlx-community/Qwen3.5-4B-4bit`
+is level with Glance's Qwen3-VL-4B on Commons photos and iNaturalist organism
+groups, and behind on insect orders, where the 4B confuses flies with bugs and
+bees. Pooled, 0.915 on 541 yes/no questions and 0.911 on 270 pick-one, to
+Glance's 0.939 and 0.933; the best hosted models in its table reach 0.961 and
+0.937. A yes/no about a full-size photo takes 0.9 s on a Mac. Every number,
+with intervals and the paired comparison, is in
+[Measurements](measurements.md#images-glances-fresh-photo-sets).
+
 ## Where Jev leads
 
 The tie in the [README](../README.md)'s chart is real, and so is this. On the same rows Jev is ahead on:

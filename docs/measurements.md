@@ -320,6 +320,47 @@ tournament stays. The speed is real and worth having; getting it without the
 bias would take reading options from one decision position instead of from
 letter tokens, which is a trained head, not a prompt change.
 
+### Images: Glance's fresh photo sets
+
+[Glance](https://github.com/yoheinakajima/glance) (Apache-2.0) reads the
+same kind of answer logits from Qwen3-VL-4B and publishes three sets of
+photos taken after every model it compares was released, labeled by people
+outside that project: Wikimedia Commons photos of 13 everyday classes,
+iNaturalist photos of 10 organism groups, and iNaturalist photos of 7 insect
+orders. We scored ruling's `vision:mlx-community/Qwen3.5-4B-4bit` on the
+same items: the evaluation half of each set, 541 yes/no questions and 270
+pick-one, with the photos fetched from the sources Glance's manifests name
+(byte-identical to the files it scored; Commons thumbnails at 1280 px,
+iNaturalist at its medium size) and only CC0, CC BY and CC BY-SA photos
+kept. ruling ran at three orderings with the default 1,024-token image cap,
+one question per request. Glance's numbers are its own published results;
+its per-item files reproduce them exactly.
+
+| set | yes/no: ruling 4B | yes/no: Glance, Qwen3-VL-4B | pick-one: ruling 4B | pick-one: Glance, Qwen3-VL-4B |
+|---|---:|---:|---:|---:|
+| Commons (131 / 65) | 0.916 | 0.931 | 0.892 | 0.862 |
+| iNaturalist groups (200 / 100) | 0.940 | 0.940 | 0.920 | 0.920 |
+| iNaturalist insect orders (210 / 105) | 0.890 | 0.943 | 0.914 | 0.990 |
+| pooled (541 / 270) | **0.915** [0.889, 0.939] | 0.939 | **0.911** [0.878, 0.944] | 0.933 |
+
+Intervals are 95%, 10,000 resamples of whole photos stratified by set, as
+Glance computes them. Paired item by item on the two sets whose per-item
+results Glance publishes, ruling minus Glance is −0.6 points on yes/no
+[−3.0, +1.9] over 331 questions and +1.2 on pick-one [−2.4, +4.8] over 165:
+no difference. The insect orders are where the 4B falls behind, by 5 points
+on yes/no and 8 on pick-one (unpaired: Glance's per-item file for that set is
+not published). The misses are recognition, not the readout: on yes/no 18 of
+96 true statements were answered no against 5 of 114 false ones yes, and 5 of
+the 9 pick-one errors called a fly a true bug or a bee. The best hosted
+models in Glance's table reach 0.961 on yes/no (Gemini 3.1 Flash-Lite) and
+0.937 on pick-one.
+
+Median latency per decision on one Mac was 374 ms: 916 ms for a yes/no about
+a full-size Commons photo (Glance reports 1.1 s on an M5) and 277 ms on the
+smaller iNaturalist photos (Glance: 0.33 s). Peak memory for the run was
+4.1 GB. The photos stay out of this repository, as Glance keeps them out of
+its own; the scripts that fetched and scored them are not part of it either.
+
 ### Latency and throughput
 
 Median of five requests, short JSON state, engine warm, same batch as the
