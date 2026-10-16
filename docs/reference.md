@@ -231,6 +231,25 @@ A request with `"exclude_from_training": true`, the field Endor's clients send
 for benchmark and evaluation traffic, is answered as usual but never logged,
 and its response has no `id`.
 
+`ruling retrain` closes the loop on a schedule, with nobody watching:
+
+```bash
+uv run ruling retrain --ledger ledger.sqlite --adapters runs/adapters/tickets --holdout my-holdout.jsonl
+RULING_ADAPTER=runs/adapters/tickets/current uv run ruling serve
+```
+
+Each run exports the decisions with outcomes, drops any whose state appears in
+a `--holdout` set, and trains the next version (`v1`, `v2`, …) from the
+weights of the one being served. It then scores both on the held-out sets and
+repoints `current` at the new version only if its log loss is lower and its
+accuracy is no worse; restart the server to serve it. Every version
+directory keeps its training records, its training log and `retrain.json`,
+the comparison and the reason for the verdict, promoted or not. Until
+`--min-records` decisions (100 by default) have outcomes, a run does nothing.
+`--steps`, `--learning-rate`, `--batch-size`, `--warmup`, `--eval-every`,
+`--valid-fraction` and `--seed` reach the trainer; the LoRA layout always
+follows the version it starts from.
+
 ## API
 
 `POST /v1/systemone`

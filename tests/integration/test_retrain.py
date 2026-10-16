@@ -1,0 +1,51 @@
+"""The loop end to end: decisions served with a ledger, outcomes reported, then retraining that
+promotes a new adapter only when it beats the served one on held-out data."""
+
+import json
+
+import pytest
+from fastapi.testclient import TestClient
+
+from ruling import states
+from ruling.build import write
+from ruling.cli import main
+from ruling.ledger import DecisionLedger
+from ruling.registry import Registry
+from ruling.retrain import CURRENT, REPORT, should_promote
+from ruling.server import create_app
+
+from .conftest import TEST_MODEL
+
+pytestmark = [pytest.mark.integration, pytest.mark.heavy]
+
+
+def test_served_outcomes_train_a_version_that_is_promoted_only_if_better(engine, tmp_path, monkeypatch):
+    ledger_path, adapters, holdout = tmp_path / "ledger.sqlite", tmp_path / "adapters", tmp_path / "holdout.jsonl"
+    served = [r for r in states.generate(400, seed=21) if r.family == "state_access"][:40]
+    write([r.model_dump(mode="json") for r in states.generate(400, seed=22) if r.family == "state_access"][:12],
+          holdout)
+    with TestClient(create_app(Registry.single(engine), None, 4, DecisionLedger(ledger_path))) as client:
+        for record in served:
+            body = {"state": record.state,
+                    "questions": {qid: q.model_dump(exclude_none=True) for qid, q in record.questions.items()}}
+            decision = client.post("/v1/systemone", json=body).json()["id"]
+            assert client.post(f"/v1/decisions/{decision}/outcome", json={"labels": record.labels}).status_code == 200
+        # A benchmark row sent through the server never becomes training data.
+        client.post("/v1/systemone", json={**body, "exclude_from_training": True})
+
+    monkeypatch.setenv("RULING_ROTATIONS", "1")
+    command = ["retrain", "--ledger", str(ledger_path), "--adapters", str(adapters), "--holdout", str(holdout),
+               "--model", TEST_MODEL, "--steps", "4", "--warmup", "1", "--eval-every", "2", "--batch-size", "4",
+               "--valid-fraction", "0.2"]
+    main([*command, "--min-records", str(len(served) + 1)])
+    assert not adapters.exists()
+
+    for run, version in enumerate(("v1", "v2")):
+        before = (adapters / CURRENT).resolve().name if (adapters / CURRENT).exists() else None
+        main([*command, "--min-records", "20"])
+        report = json.loads((adapters / version / REPORT).read_text())
+        assert report["records"] == len(served) and report["started_from"] == before
+        assert (adapters / version / "adapters.safetensors").exists()
+        assert report["promoted"] == should_promote(report["current"], report["candidate"])[0]
+        now = (adapters / CURRENT).resolve().name if (adapters / CURRENT).exists() else None
+        assert now == (version if report["promoted"] else before)

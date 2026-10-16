@@ -24,6 +24,11 @@ from ruling.registry import build_engine
 from ruling.server import app_from_env
 
 
+# The training settings a retraining run may set; the LoRA layout always follows the adapter it starts from.
+RETRAIN_OPTIONS = (("steps", int), ("batch-size", int), ("learning-rate", float), ("warmup", int), ("eval-every", int),
+                   ("valid-fraction", float), ("seed", int))
+
+
 def bundled_evaluations() -> list[Path]:
     """The labeled evaluation datasets shipped in `datasets/`, excluding row-selection manifests."""
     folder = Path(__file__).resolve().parents[1] / "datasets"
@@ -125,6 +130,19 @@ def main(argv: list[str] | None = None) -> None:
                                     help="write the served decisions that have outcomes as training records")
     decisions.add_argument("--ledger", type=Path, required=True, help="the server's RULING_LEDGER file")
     decisions.add_argument("--output", type=Path, required=True)
+
+    again = commands.add_parser("retrain", help="train on the ledger's resolved decisions and promote the result "
+                                                "only if it beats the served adapter on held-out data")
+    again.add_argument("--ledger", type=Path, required=True, help="the server's RULING_LEDGER file")
+    again.add_argument("--adapters", type=Path, required=True,
+                       help="versions v1, v2, ... and `current`, the one to serve: RULING_ADAPTER=<this>/current")
+    again.add_argument("--holdout", type=Path, nargs="*", default=bundled_evaluations(),
+                       help="labeled sets both versions are scored on; their states are never trained on")
+    again.add_argument("--model", help="base model; defaults to RULING_MODEL")
+    again.add_argument("--min-records", type=int, default=100,
+                       help="do nothing until this many decisions have outcomes")
+    for name, kind in RETRAIN_OPTIONS:
+        again.add_argument(f"--{name}", type=kind)
 
     encoder = commands.add_parser("train-encoder", help="fully fine-tune a decision encoder on training records")
     encoder.add_argument("--data", type=Path, nargs="+", required=True)
@@ -228,6 +246,14 @@ def main(argv: list[str] | None = None) -> None:
                              holdout=args.holdout, grad_checkpoint=args.grad_checkpoint, from_adapter=args.from_adapter,
                              **{k: v for k, v in options.items() if v is not None})
         Trainer(config, resume=args.resume).run()
+        return
+    if args.command == "retrain":
+        from ruling.ledger import DecisionLedger
+        from ruling.retrain import retrain
+        settings = Settings.from_env()
+        options = {name.replace("-", "_"): getattr(args, name.replace("-", "_")) for name, _ in RETRAIN_OPTIONS}
+        retrain(DecisionLedger(args.ledger), args.adapters, args.model or settings.model, args.holdout, settings,
+                args.min_records, {k: v for k, v in options.items() if v is not None})
         return
     if args.command == "export-adapter":
         from ruling.peft import export_adapter
