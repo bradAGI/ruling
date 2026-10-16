@@ -79,6 +79,29 @@ def test_a_server_whose_default_model_sees_opens_on_an_image_example_it_answers(
     assert max(answers["total"]["probabilities"], key=answers["total"]["probabilities"].get) == "1"
 
 
+def test_a_server_with_a_key_answers_the_page_once_the_key_is_entered(page: Page, engine):
+    server, thread, url = _serve(create_app(Registry.single(engine), "s3cret", 4))
+    try:
+        with page.expect_response("**/v1/models") as listed:
+            page.goto(url)
+        assert listed.value.status == 401 and page.locator("#model option").count() == 0
+        with page.expect_response("**/v1/models") as relisted:
+            page.fill("#key", "s3cret")
+            page.dispatch_event("#key", "change")
+        assert relisted.value.status == 200
+        page.wait_for_selector("#model option", state="attached")
+        with page.expect_response("**/v1/systemone") as answered:
+            page.click("#run")
+        assert answered.value.status == 200
+        # The history page reads the key the playground kept for this tab.
+        with page.expect_response("**/v1/retrain") as history:
+            page.goto(f"{url}/history")
+        assert history.value.status == 200
+    finally:
+        server.should_exit = True
+        thread.join(timeout=10)
+
+
 def test_the_history_page_shows_every_finished_run_and_the_one_being_served(page: Page, tmp_path):
     adapters = tmp_path / "tickets"
     adapters.mkdir()

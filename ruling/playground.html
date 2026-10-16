@@ -28,6 +28,7 @@
   .thumb img { display: block; width: 96px; height: 72px; object-fit: cover; border: 1px solid var(--line); border-radius: 4px; }
   .thumb button { position: absolute; top: 2px; right: 2px; padding: 0 5px; font-size: 12px; line-height: 16px; }
   input[type=file] { font: inherit; font-size: 12px; margin-top: 8px; max-width: 100%; }
+  #key, select { width: 100%; box-sizing: border-box; margin-bottom: 8px; background: transparent; color: inherit; border: 1px solid var(--line); border-radius: 4px; padding: 6px 8px; font: inherit; }
   button.small { grid-column: auto; padding: 2px 8px; font-size: 12px; background: transparent; color: inherit; border-color: var(--line); }
   @media (max-width: 700px) { main { grid-template-columns: 1fr; } }
 </style>
@@ -57,6 +58,8 @@
   <div>
     <label for="model">model</label>
     <select id="model"></select>
+    <label for="key">API key, only for a server started with RULING_API_KEY</label>
+    <input id="key" type="password" autocomplete="off">
   </div>
   <button id="run">Decide</button>
   <div id="out"></div>
@@ -69,7 +72,29 @@ const thumbs = document.getElementById("thumbs");
 const stateBox = document.getElementById("state");
 const modalities = {};
 let picked = [];
-fetch("/v1/models").then(r => r.json()).then(data => {
+const keyBox = document.getElementById("key");
+// Kept for this tab only, and shared with the history page, which reads it from the same place.
+try { keyBox.value = sessionStorage.getItem("ruling-key") || ""; } catch {}
+function auth() {
+  const key = keyBox.value.trim();
+  return key ? { authorization: `Bearer ${key}` } : {};
+}
+keyBox.onchange = () => {
+  try { sessionStorage.setItem("ruling-key", keyBox.value.trim()); } catch {}
+  listModels();
+};
+function listModels() {
+  return fetch("/v1/models", { headers: auth() }).then(async r => {
+    const data = await r.json();
+    if (r.status === 401) throw new Error("this server needs its API key; enter it above");
+    if (!r.ok) throw new Error(`${r.status} ${data.error.code}: ${data.error.message}`);
+    return data;
+  }).then(showModels).catch(e => { out.innerHTML = `<div class="err">could not list models: ${e.message}</div>`; });
+}
+function showModels(data) {
+  const first = !model.options.length;
+  model.innerHTML = "";
+  out.innerHTML = "";
   for (const m of data.models) {
     modalities[m.name] = m.modalities;
     const option = document.createElement("option");
@@ -79,8 +104,9 @@ fetch("/v1/models").then(r => r.json()).then(data => {
   }
   showModalities();
   // A server whose default model reads images opens on an example that uses one.
-  if ((modalities[model.value] || []).includes("image")) loadImageExample();
-}).catch(e => { out.innerHTML = `<div class="err">could not list models: ${e.message}</div>`; });
+  if (first && (modalities[model.value] || []).includes("image")) loadImageExample();
+}
+listModels();
 function parseState(text) { try { return JSON.parse(text); } catch { return text; } }
 function countImages(value) {
   if (Array.isArray(value)) return value.reduce((n, v) => n + countImages(v), 0);
@@ -168,7 +194,8 @@ document.getElementById("run").onclick = async () => {
   catch (e) { out.innerHTML = `<div class="err">questions is not valid JSON: ${e.message}</div>`; return; }
   const body = { model: model.value, state: withImages(parseState(stateBox.value)), questions };
   const started = performance.now();
-  const res = await fetch("/v1/systemone", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+  const res = await fetch("/v1/systemone", { method: "POST", headers: { "content-type": "application/json", ...auth() },
+                                             body: JSON.stringify(body) });
   const ms = Math.round(performance.now() - started);
   const data = await res.json();
   if (!res.ok) { out.innerHTML = `<div class="err">${res.status} ${data.error.code}: ${data.error.message}</div>`; return; }

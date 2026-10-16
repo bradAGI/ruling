@@ -41,8 +41,11 @@ function text(value) {
   span.textContent = value;
   return span.innerHTML;
 }
-fetch("/v1/retrain").then(async r => {
+let key = "";
+try { key = sessionStorage.getItem("ruling-key") || ""; } catch {}
+fetch("/v1/retrain", { headers: key ? { authorization: `Bearer ${key}` } : {} }).then(async r => {
   const data = await r.json();
+  if (r.status === 401) throw new Error("this server needs its API key; enter it in the playground first");
   if (!r.ok) throw new Error(`${r.status} ${data.error.code}: ${data.error.message}`);
   return data;
 }).then(data => {

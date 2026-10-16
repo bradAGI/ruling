@@ -48,7 +48,9 @@ TypeSafe's own official SDK works against it unchanged — point
 
 ![The playground: a state, three questions, a model picker, and each answer's probabilities as bars](../assets/playground.png)
 
-The playground's model picker lists every name the server answers to; [serve
+On a server started with `RULING_API_KEY`, enter the key in the playground;
+it is kept for the browser tab only. The playground's model picker lists
+every name the server answers to; [serve
 several models](models.md#serve-several-models-from-one-process) to compare them on the
 same state.
 
