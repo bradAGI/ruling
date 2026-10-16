@@ -22,7 +22,7 @@ from pathlib import Path
 import mlx.core as mx
 import numpy as np
 from huggingface_hub import HfApi, snapshot_download
-from huggingface_hub.errors import HfHubHTTPError, HFValidationError
+from huggingface_hub.errors import HfHubHTTPError, HFValidationError, LocalEntryNotFoundError
 from mlx.utils import tree_flatten
 from mlx_lm import load
 from mlx_lm.models.cache import make_prompt_cache
@@ -205,18 +205,26 @@ class _SharedModel:
 
 
 def model_released(model_id: str) -> str:
-    """The date the served weights were published, as `YYYY-MM-DD`.
+    """The date the served weights were published, as `YYYY-MM-DD`, or "" when unknown.
 
     Read from the Hugging Face repository when the model came from one and it is
     reachable. A local directory, or an unreachable repository, falls back to the
-    date the weights landed on this machine.
+    date the weights landed on this machine. A served id carries its engine's
+    prefix (`openai:`, `vision:`, ...), which no repository id can contain, so the
+    repository is what follows the last colon. A remote service's own model names
+    (`typesafe:jev-latest`) name no repository: their date is unknown, and the
+    hosted API's clients require a string.
     """
-    local = Path(model_id)
+    repo = model_id.rsplit(":", 1)[-1]
+    local = Path(repo)
     if not local.exists():
         try:
-            return HfApi().model_info(model_id).last_modified.date().isoformat()
+            return HfApi().model_info(repo).last_modified.date().isoformat()
         except (HfHubHTTPError, HFValidationError, OSError, AttributeError):
-            local = Path(snapshot_download(model_id, allow_patterns=["config.json"], local_files_only=True))
+            try:
+                local = Path(snapshot_download(repo, allow_patterns=["config.json"], local_files_only=True))
+            except (HFValidationError, LocalEntryNotFoundError):
+                return ""
     return date.fromtimestamp(local.stat().st_mtime).isoformat()
 
 

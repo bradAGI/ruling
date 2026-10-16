@@ -134,3 +134,15 @@ def test_each_decision_server_entry_is_asked_at_its_own_address(live_server, tmp
         assert up.status_code == 200 and up.json()["answers"]["team"]["choice"] == "billing"
         down = client.post("/v1/systemone", json={**PAYLOAD, "model": "down"})
         assert down.status_code == 503 and down.json()["error"]["code"] == "upstream_unavailable"
+
+
+def test_remote_models_are_listed_with_the_release_date_of_any_repository_they_name():
+    from ruling.hosted import HostedEngine, TypeSafeEngine
+
+    engines = {"repo": HostedEngine(f"openai:{TEST_MODEL}", Calibration(), 1, "http://127.0.0.1:9/v1"),
+               "service": TypeSafeEngine("typesafe:jev-latest", Calibration(), "http://127.0.0.1:9", None, 1000, 1000)}
+    with TestClient(create_app(Registry("repo", engines), None, 4)) as client:
+        response = client.get("/v1/models")
+    assert response.status_code == 200
+    dates = {m["name"]: m["release_date"] for m in response.json()["models"]}
+    assert dates["repo"][:4].isdigit() and dates["service"] == ""
