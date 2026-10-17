@@ -31,12 +31,35 @@
   input[type=file] { font: inherit; font-size: 12px; margin-top: 8px; max-width: 100%; }
   #key, select { width: 100%; box-sizing: border-box; margin-bottom: 8px; background: transparent; color: inherit; border: 1px solid var(--line); border-radius: 4px; padding: 6px 8px; font: inherit; }
   button.small { grid-column: auto; padding: 2px 8px; font-size: 12px; background: transparent; color: inherit; border-color: var(--line); }
-  @media (max-width: 700px) { main { grid-template-columns: 1fr; } }
+  nav { grid-column: 1 / -1; display: flex; gap: 4px; border-bottom: 1px solid var(--line); }
+  nav button { grid-column: auto; background: transparent; color: var(--muted); border: 1px solid transparent; border-bottom: none; border-radius: 4px 4px 0 0; padding: 6px 14px; }
+  nav button.on { color: var(--fg); border-color: var(--line); background: var(--bg); margin-bottom: -1px; }
+  section { grid-column: 1 / -1; display: grid; gap: 16px; grid-template-columns: 1fr 1fr; }
+  section[hidden] { display: none; }
+  #question { min-height: 80px; }
+  .said { font-size: 22px; margin: 2px 0 4px; }
+  .work { border-top: 1px dashed var(--line); margin-top: 8px; padding-top: 8px; }
+  details summary { cursor: pointer; color: var(--muted); font-size: 12px; }
+  pre { white-space: pre-wrap; font: inherit; font-size: 12px; margin: 6px 0; }
+  @media (max-width: 700px) { main { grid-template-columns: 1fr; } section { grid-template-columns: 1fr; } }
 </style>
 </head>
 <body>
 <main>
   <h1>ruling <small>typed decisions, no text generation · <a href="/history">retraining history</a></small></h1>
+  <div>
+    <label for="model">model</label>
+    <select id="model"></select>
+  </div>
+  <div>
+    <label for="key">API key, only for a server started with RULING_API_KEY</label>
+    <input id="key" type="password" autocomplete="off">
+  </div>
+  <nav>
+    <button type="button" id="tab-decide" class="on">decide</button>
+    <button type="button" id="tab-ask">ask</button>
+  </nav>
+  <section id="decide">
   <div>
     <label for="state">state (text or JSON)</label>
     <textarea id="state">{"message": "My card was charged twice for one order. Refund the duplicate."}</textarea>
@@ -56,14 +79,17 @@
   "refund": {"type": "noul", "instructions": "The customer asks for a refund."}
 }</textarea>
   </div>
-  <div>
-    <label for="model">model</label>
-    <select id="model"></select>
-    <label for="key">API key, only for a server started with RULING_API_KEY</label>
-    <input id="key" type="password" autocomplete="off">
-  </div>
   <button id="run">Decide</button>
   <div id="out"></div>
+  </section>
+  <section id="ask" hidden>
+  <div style="grid-column: 1 / -1">
+    <label for="question">a question in plain words; the model reads it as typed questions and answers those</label>
+    <textarea id="question">is a hot dog a sandwich?</textarea>
+  </div>
+  <button id="ask-run">Ask</button>
+  <div id="ask-out"></div>
+  </section>
 </main>
 <script>
 const out = document.getElementById("out");
@@ -211,6 +237,69 @@ document.getElementById("run").onclick = async () => {
     html += "</div>";
   }
   out.innerHTML = html;
+};
+// The ask tab: one question in words, the typed questions it became, and every answer with its check.
+const askOut = document.getElementById("ask-out");
+const tabs = { decide: document.getElementById("decide"), ask: document.getElementById("ask") };
+function showTab(name) {
+  for (const [tab, section] of Object.entries(tabs)) {
+    section.hidden = tab !== name;
+    document.getElementById(`tab-${tab}`).classList.toggle("on", tab === name);
+  }
+}
+document.getElementById("tab-decide").onclick = () => showTab("decide");
+document.getElementById("tab-ask").onclick = () => showTab("ask");
+const KIND_WORDS = { yes_or_no: "a yes or no", pick_one: "a pick", how_much: "a how much", how_likely: "a how likely" };
+function answerBars(a) {
+  if (a.type === "noul") return bar("yes", a.noul) + bar("no", 1 - a.noul);
+  let html = "";
+  for (const [k, p] of Object.entries(a.probabilities)) html += bar(a.type === "score" ? a.legend[k] : k, p);
+  return html;
+}
+function askHtml(data, ms) {
+  let html = `<div class="meta">${data.model} · ${data.usage.input_tokens} input tokens · ${ms} ms`;
+  if (data.readings.length) html += ` · read as ${data.readings.map(k => KIND_WORDS[k]).join(" and ")}`;
+  if (data.unfinished) html += " · reads as unfinished";
+  if (data.fit < 0.5) html += " · not fit for a public page";
+  html += "</div>";
+  if (data.refused) html += `<div class="q"><div class="said">No. That's not a question I can answer.</div><div class="meta">the model judged the input is not a question its types answer</div></div>`;
+  for (const s of data.answers) {
+    const who = s.source === "fact" ? "answered in the first request" : "options written by the model, then judged";
+    const check = s.checked == null ? "" : s.checked >= 0.5 ? ` · checked: stands by it (${s.checked.toFixed(2)})` : ` · <span class="err">checked: doubts this answer (${s.checked.toFixed(2)})</span>`;
+    html += `<div class="q"><div class="said">${s.said}</div><div class="meta">${KIND_WORDS[s.kind]} · ${who}${check}</div>`;
+    html += `<div class="work"><div class="meta">${s.question.instructions}</div>${answerBars(s.answer)}</div></div>`;
+  }
+  for (const d of data.dropped) html += `<div class="meta err">${d}</div>`;
+  html += `<details><summary>how it got there: the nine questions, and what the writer wrote</summary>`;
+  for (const [id, a] of Object.entries(data.facts)) {
+    html += `<div class="q"><b>${id} <span class="meta">${a.type}</span></b>${answerBars(a)}</div>`;
+  }
+  if (data.wrote != null) html += `<div class="q"><b>the writer's reply</b><pre></pre></div>`;
+  html += `</details><button type="button" id="open-decide" class="small">open in decide</button>`;
+  return html;
+}
+document.getElementById("ask-run").onclick = async () => {
+  askOut.innerHTML = '<div class="meta">asking…</div>';
+  const body = { model: model.value, input: document.getElementById("question").value };
+  const started = performance.now();
+  const res = await fetch("/v1/ask", { method: "POST", headers: { "content-type": "application/json", ...auth() },
+                                       body: JSON.stringify(body) });
+  const ms = Math.round(performance.now() - started);
+  const data = await res.json();
+  if (!res.ok) { askOut.innerHTML = `<div class="err">${res.status} ${data.error.code}: ${data.error.message}</div>`; return; }
+  askOut.innerHTML = askHtml(data, ms);
+  if (data.wrote != null) askOut.querySelector("pre").textContent = data.wrote;
+  // The typed questions behind the answers, in the decide tab, to read or change.
+  document.getElementById("open-decide").onclick = () => {
+    const questions = {};
+    data.answers.forEach((s, i) => { questions[s.source === "fact" ? s.kind : `q${i + 1}`] = s.question; });
+    stateBox.value = JSON.stringify({ input: data.input }, null, 2);
+    if (!Object.keys(questions).length) questions.yes = { type: "noul", instructions: "Answer the question in the input." };
+    document.getElementById("questions").value = JSON.stringify(questions, null, 2);
+    picked = [];
+    showThumbs();
+    showTab("decide");
+  };
 };
 </script>
 </body>

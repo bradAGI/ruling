@@ -7,6 +7,7 @@ import pytest
 from PIL import Image
 from playwright.sync_api import Page
 
+from ruling.ask import FACTS
 from ruling.calibration import Calibration
 from ruling.engine import Engine
 from ruling.registry import Registry
@@ -135,3 +136,23 @@ def test_the_history_page_shows_every_finished_run_and_the_one_being_served(page
     finally:
         server.should_exit = True
         thread.join(timeout=10)
+
+
+def test_the_ask_tab_answers_in_words_and_opens_its_typed_questions_in_decide(page: Page, served):
+    page.goto(served)
+    page.select_option("#model", "text")      # waits for the picker to be filled from /v1/models
+    page.click("#tab-ask")
+    page.fill("#question", "can penguins fly")
+    with page.expect_response("**/v1/ask") as answered:
+        page.click("#ask-run")
+    body = answered.value.json()
+    assert set(body["facts"]) == set(FACTS)
+    page.wait_for_selector("#open-decide")
+    # The answers on the page are the response's, and the fact bars are drawn for all nine.
+    assert page.locator("#ask-out .said").count() == len(body["answers"]) + int(body["refused"])
+    assert page.locator("#ask-out details .q").count() >= len(FACTS)
+    page.click("#open-decide")
+    assert not page.is_hidden("#decide") and page.is_hidden("#ask")
+    assert json.loads(page.input_value("#state")) == {"input": "can penguins fly"}
+    questions = json.loads(page.input_value("#questions"))
+    assert questions and all(q["type"] in ("noul", "choice", "score") for q in questions.values())

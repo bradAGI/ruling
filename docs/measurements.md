@@ -211,6 +211,36 @@ Earlier batch, `Qwen3.5-4B-4bit`, kept because these two sets were not re-run.
 SST-5 is a five-way ordinal task where fine-tuned encoders reach about 0.59.
 Zero-shot, from a 4-bit 4B model, 0.53 with an ECE under 0.1 is usable.
 
+### Reading a question in plain words
+
+`ruling ask` and the playground's ask tab put nine typed questions to the
+model about a question typed in words (`ruling/ask.py`), and the rules act
+on the answers. The 25 routing cases in `datasets/routing/ask25.jsonl`,
+adapted from lmjtfy's, say how each input should be read: whether it is
+answerable, which kinds it may be read as, whether it needs its own scale,
+whether it is several questions, and whether it is fit to show. A case
+passes when every fact it has a view on is read its way. Run on 16 October
+2026, temperature 1.0, prior debiasing off:
+
+| model | cases right | answerable | reads | scale | several | fit | whole |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| Qwen3.5-4B, 1 ordering | 12 of 25 | 19 | 23 | 22 | 24 | 23 | 25 |
+| Qwen3.5-4B, 3 orderings | 18 of 25 | 21 | 24 | 25 | 24 | 24 | 25 |
+| Qwen3.6-35B-A3B, 3 orderings | **23 of 25** | 24 | 25 | 24 | 25 | 25 | 25 |
+| Jev, as lmjtfy reports | 25 of 25 | | | | | | |
+
+The per-fact columns count cases whose answer to that fact matched, out of
+the 25 (or the cases with a view, for `scale` and `several`). The 35B misses
+two: it reads "how good is the movie The Matrix?" as needing its own scale,
+and "rate my startup idea: uber for dogs" as not a question its types
+answer. The 4B at three orderings misses those two, splits "should I
+rewrite it in rust" into a yes-or-no and a pick, takes "What are the
+chances that all recent slot machines are vibe-coded?" for something it
+cannot judge, and refuses the two unfit cases outright as unanswerable,
+where the cases expect them read as yes-or-no questions and marked unfit;
+on this wording a refusal is the safer reading. Every input is read as
+finished by every model.
+
 ### Latency and throughput
 
 Median of five requests, short JSON state, engine warm, same batch as the

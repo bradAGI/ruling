@@ -55,6 +55,32 @@ is kept for the browser tab only. The model picker lists every name the server
 answers to; [serve several models](models.md#serve-several-models-from-one-process)
 to compare them on the same state.
 
+## Ask in plain words
+
+The playground's **ask** tab takes a question in words instead of typed
+questions. The model is first asked nine typed questions *about* the input,
+in one request: whether it can be judged at all, what kind of question it is
+(a yes or no, a pick, a how much, a how likely), whether it is several
+questions, whether it is finished and fit to show, and the answer read three
+ways. For a yes-or-no or a how-much on a general scale, that first request
+already holds the answer and nothing is generated. A pick or a scale with its
+own units needs options written, and the same model writes them as a short
+JSON tool call, allowed only the kinds of question the rules asked for; then
+it judges what it wrote, and only that judgment is shown. Each shown answer
+is sent back once more as "is this right?", and the page says whether the
+model stands by it. Under the answer, "how it got there" shows all nine
+readings and the writer's reply byte for byte, and **open in decide** puts
+the typed questions behind the answer into the decide tab to read or change.
+
+```bash
+ruling ask "is a hot dog a sandwich?"        # the same, without a server; prints the whole reading as JSON
+```
+
+The nine questions and the rules follow [lmjtfy](https://lmjtfy.fun), credited
+in [THIRD_PARTY.md](../THIRD_PARTY.md). How reliably open models read the
+25 routing cases that wording was measured on is in
+[Measurements](measurements.md#reading-a-question-in-plain-words).
+
 ## Ask about images
 
 The default Qwen3.5 models can see. Serve one as a `vision:` model and put
@@ -95,9 +121,9 @@ decisions about images, see [Fine-tune on images](fine-tuning.md#fine-tune-on-im
   [`sdks/typescript`](../sdks/typescript).
 - **TypeSafe's own SDK**, unmodified: point `TYPESAFE_BASE_URL` at the
   server; see [the reference](reference.md#typesafes-own-sdk-talks-to-ruling).
-- **The command line**: `ruling ask` answers once without a server, and
-  `ruling predict` answers a whole file of rows; see
-  [Command line](reference.md#command-line).
+- **The command line**: `ruling ask` answers once without a server, typed
+  questions or a question in words, and `ruling predict` answers a whole file
+  of rows; see [Command line](reference.md#command-line).
 - **Batches over HTTP**: `POST /v1/predict` answers thousands of rows in one
   request and `POST /v1/evaluations` scores labeled ones; see
   [the API](reference.md#api).

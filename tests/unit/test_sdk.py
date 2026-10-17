@@ -10,6 +10,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from ruling import Image, RetryPolicy, RulingClient, RulingError
+from ruling.ask import AskResponse, FACTS
 from ruling.questions import ChoiceAnswer, NoulAnswer
 from ruling.sdk import GZIP_THRESHOLD
 
@@ -121,3 +122,10 @@ def test_images_are_built_from_files_and_bytes_in_the_wire_shape(tmp_path):
         Image.from_path(tmp_path / "animated.gif")
     with pytest.raises(ValueError):
         Image.from_bytes(b"GIF89a", "image/gif")
+
+
+def test_ask_returns_the_typed_reading_of_a_question_in_words():
+    with client_for(app_with()) as client:
+        response = client.ask("is water wet?")
+    assert isinstance(response, AskResponse) and set(response.facts) == set(FACTS)
+    assert response.input == "is water wet?" and response.usage.input_tokens > 0

@@ -65,6 +65,14 @@ of JevBench's 111 hard items to Clef-flash's 67. pplx-decider, at 15 GB, is
 ahead of both on every set here except TypeSafe's, where it cannot read the
 13 rows over 8,192 tokens; it gets 86 of the 111 hard items.
 
+## A question in plain words
+
+The ask tab reads a free-text question as typed questions before answering
+it. On the 25 routing cases adapted from lmjtfy, the 35B reads 23 the way
+the cases say and the default 4B reads 18 at three orderings, against 25 for
+Jev; the per-fact tally and the misses are in
+[Measurements](measurements.md#reading-a-question-in-plain-words).
+
 ## Images
 
 On [Glance](https://github.com/yoheinakajima/glance)'s three sets of photos

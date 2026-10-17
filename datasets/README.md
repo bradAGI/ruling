@@ -44,6 +44,15 @@ one question named `decision`. See the
 | `wanli256-selection.jsonl` | 256 | manifest only | The row selection TheoLeeCJ/openjev published for its WANLI evaluation, vendored so `ruling build-dataset wanli` rebuilds exactly those rows. |
 | `typesafe102-selection.jsonl` | 102 | manifest only | TheoLeeCJ/openjev's alignment of TypeSafe's public evaluation cases, with a hash of each workflow payload. `ruling build-dataset typesafe` rebuilds exactly those rows and refuses if TypeSafe's payloads change. |
 
+## Routing cases
+
+`routing/ask25.jsonl` is not a record dataset: each line is a question in
+plain words and how it should be read by the nine questions `ruling ask` and
+the playground's ask tab put to the model (`answerable`, `reads`, `scale`,
+`several`, `fit`). Adapted from lmjtfy's routing cases (MIT OR Apache-2.0,
+credited in [THIRD_PARTY.md](../THIRD_PARTY.md)); the tally per model is in
+[Measurements](../docs/measurements.md#reading-a-question-in-plain-words).
+
 ## Built on demand
 
 These download a pinned revision from the Hugging Face hub and write ruling

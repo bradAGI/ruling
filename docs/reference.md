@@ -265,6 +265,15 @@ uv run ruling ask "Since this morning every request with our API key returns 401
   --noul   "blocked=The customer is blocked from using the product."
 ```
 
+With no typed question, `ask` reads its text as a question in plain words:
+`ruling ask "can penguins fly"`. It asks the model the nine routing questions
+in `ruling/ask.py`, answers what they settle, has the served model write
+options for a pick or a scale when one is needed, judges them, checks each
+answer, and prints the same JSON `POST /v1/ask` returns. The writer is the
+served model itself, so this works for a local text model; a `vision:`,
+hosted or decision-server model answers the readings and says it cannot
+write options.
+
 ### eval, calibrate and predict
 
 `ruling eval DATASET` scores a labeled dataset (any shape under
@@ -513,6 +522,37 @@ what was right, and returns the labels as stored; it exists only with a ledger.
 See [Learn from your own traffic](#learn-from-your-own-traffic) for the label
 forms it accepts and what happens to the decisions afterward.
 
+### POST /v1/ask
+
+```json
+{"model": "optional", "input": "is a hot dog a sandwich?", "images": "optional, image blocks the question is about"}
+```
+
+A question in plain words. The response carries the model's reading of it and
+every answer with its work:
+
+| Field | Meaning |
+|---|---|
+| `facts` | the nine routing questions' answers, keyed `answerable`, `kind`, `several`, `yes`, `degree`, `scale`, `chance`, `fit`, `whole` |
+| `readings` | the kinds the input was read as: the likeliest of `yes_or_no`, `pick_one`, `how_much`, `how_likely`, and a runner-up at 0.3 or more |
+| `refused` | true when the model judged the input is not a question its types answer; then `answers` is empty |
+| `unfinished` | true when the input reads as cut off part way; it is answered as it stands |
+| `fit` | the probability the input is fit to show strangers |
+| `answers` | one per reading: `kind`, `source` (`fact` for an answer the first request held, `writer` for one the model wrote and then judged), the `question` asked, the `answer` as `/v1/systemone` returns it, `said` (the answer in words: `Yes.`, `No?`, `28%.`, `Vim.`), and `checked`, the probability that `said` is right, asked afterward |
+| `wrote` | the writer's reply, byte for byte, when it was called |
+| `dropped` | what the writer wrote that was not used, each with the reason, or why nothing could be written |
+| `usage` | input tokens over every request made |
+
+The rules, in order: an input the model cannot judge is refused; several
+questions go whole to the writer with every tool; a yes-or-no is answered
+from the `yes` fact, a how-likely from `chance`, a how-much from `degree`
+unless `scale` says it needs its own units, in which case the writer drafts
+the scale; a pick has the writer draft 2 to 8 options. The writer may draft
+at most 4 questions and only of the kinds asked for; anything else it writes
+is listed under `dropped`. A model that cannot write (every engine but a
+local text model) answers the direct readings and reports the rest as
+dropped. The request counts as one decision in `GET /v1/usage`.
+
 ### POST /v1/predict and POST /v1/evaluations
 
 Both take `{"model"?, "rows": [...]}`, 1 to 50,000 rows, each in any shape
@@ -715,6 +755,11 @@ print(report["overall"]["accuracy"], report["by_question"]["team"]["selective"][
 for bucket in client.usage(starting_on=datetime.now() - timedelta(days=1)):
     print(bucket["hour"], bucket["model"], bucket["decisions"], bucket["input_tokens"])
 ```
+
+`client.ask("is water wet?")` posts a question in words to `/v1/ask` and
+returns its reading as an `AskResponse`: `readings`, `answers` with what was
+`said` and whether each was `checked`, the nine `facts`, and what the writer
+`wrote`.
 
 Images go into a state as the wire dict `/v1/systemone` reads; `Image` builds
 one from a file (`.png`, `.jpg`, `.jpeg` or `.webp`; anything else raises

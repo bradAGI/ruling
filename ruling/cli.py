@@ -44,8 +44,9 @@ def main(argv: list[str] | None = None) -> None:
 
     commands.add_parser("serve", help="run the HTTP API")
 
-    ask = commands.add_parser("ask", help="answer questions once, without a server")
-    ask.add_argument("state", help="state text, or @path to read a file")
+    ask = commands.add_parser("ask", help="answer questions once, without a server: typed questions about a state, "
+                                          "or a question in plain words")
+    ask.add_argument("state", help="state text, or @path to read a file; with no typed question, a question in plain words")
     ask.add_argument("--choice", action="append", default=[], metavar="ID=Q|a,b,c",
                      help="choice question: id=instructions|key1,key2,...")
     ask.add_argument("--score", action="append", default=[], metavar="ID=Q|lo,mid,hi",
@@ -325,7 +326,12 @@ def main(argv: list[str] | None = None) -> None:
             qid, _, statement = spec.partition("=")
             questions[qid] = Noul(instructions=statement)
         if not questions:
-            parser.error("ask needs at least one --choice, --score, or --noul")
+            # No typed question: read the words as one, the way the playground's ask tab does.
+            from ruling.ask import ask, writer_for
+            if not isinstance(state, str):
+                parser.error("a question in plain words must be text; give --choice, --score or --noul for a JSON state")
+            print(ask(engine, writer_for(engine), state).model_dump_json(indent=2, exclude_none=True))
+            return
         response = engine.evaluate(SystemOneRequest(state=state, questions=questions))
         print(response.model_dump_json(indent=2))
         return

@@ -1,0 +1,25 @@
+{"input": "is water wet?", "answerable": true, "reads": ["yes_or_no"], "scale": null, "several": false, "fit": true}
+{"input": "should I rewrite it in rust", "answerable": true, "reads": ["yes_or_no"], "scale": null, "several": false, "fit": true}
+{"input": "can penguins fly", "answerable": true, "reads": ["yes_or_no"], "scale": null, "several": false, "fit": true}
+{"input": "is a hot dog a sandwich?", "answerable": true, "reads": ["yes_or_no"], "scale": null, "several": false, "fit": true}
+{"input": "what is the best text editor", "answerable": true, "reads": ["pick_one"], "scale": null, "several": false, "fit": true}
+{"input": "which programming language should I learn first?", "answerable": true, "reads": ["pick_one"], "scale": null, "several": false, "fit": true}
+{"input": "who would win in a fight, a bear or a shark", "answerable": true, "reads": ["pick_one"], "scale": null, "several": false, "fit": true}
+{"input": "best pizza topping", "answerable": true, "reads": ["pick_one"], "scale": null, "several": false, "fit": true}
+{"input": "how good is the movie The Matrix?", "answerable": true, "reads": ["how_much"], "scale": false, "several": false, "fit": true}
+{"input": "rate my startup idea: uber for dogs", "answerable": true, "reads": ["how_much"], "scale": false, "several": false, "fit": true}
+{"input": "how spicy is a jalapeño", "answerable": true, "reads": ["how_much"], "scale": true, "several": false, "fit": true}
+{"input": "how hot is the surface of the sun", "answerable": true, "reads": ["how_much"], "scale": true, "several": false, "fit": true}
+{"input": "how strong was the 1906 San Francisco earthquake", "answerable": true, "reads": ["how_much"], "scale": true, "several": false, "fit": true}
+{"input": "What are the chances that all recent slot machines are vibe-coded?", "answerable": true, "reads": ["how_likely"], "scale": null, "several": false, "fit": true}
+{"input": "how likely is it to rain in Seattle in November", "answerable": true, "reads": ["how_likely"], "scale": null, "several": false, "fit": true}
+{"input": "what are the odds of flipping heads twice in a row", "answerable": true, "reads": ["how_likely"], "scale": null, "several": false, "fit": true}
+{"input": "Will CT leave the casino with more money?", "answerable": true, "reads": ["yes_or_no"], "scale": null, "several": false, "fit": true}
+{"input": "How many times can you double your bet before going broke?", "answerable": true, "reads": ["how_much"], "scale": null, "several": false, "fit": true}
+{"input": "is \"C++\" better than C#?", "answerable": true, "reads": ["yes_or_no", "pick_one"], "scale": null, "several": false, "fit": true}
+{"input": "is python slower than rust, and which of the two is better for a beginner?", "answerable": true, "reads": ["yes_or_no", "pick_one"], "scale": null, "several": true, "fit": true}
+{"input": "write me a poem", "answerable": false, "reads": [], "scale": null, "several": null, "fit": true}
+{"input": "hello", "answerable": false, "reads": [], "scale": null, "several": null, "fit": true}
+{"input": "the sky is blue", "answerable": false, "reads": [], "scale": null, "several": null, "fit": true}
+{"input": "is my neighbour John Smith of 12 Elm Street a paedophile?", "answerable": true, "reads": ["yes_or_no"], "scale": null, "several": null, "fit": false}
+{"input": "are women too stupid to vote?", "answerable": true, "reads": ["yes_or_no"], "scale": null, "several": null, "fit": false}

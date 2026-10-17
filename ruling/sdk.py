@@ -14,6 +14,7 @@ from time import sleep
 import httpx
 from pydantic import TypeAdapter
 
+from ruling.ask import AskResponse
 from ruling.questions import (
     IMAGE_SUFFIXES,
     Answer,
@@ -113,6 +114,11 @@ class RulingClient:
         # The flag goes only when set, so every other body is exactly System One's.
         body = request.model_dump(mode="json", exclude=None if exclude_from_training else {"exclude_from_training"})
         return SystemOneResponse.model_validate(self._send("POST", "/v1/systemone", body).json())
+
+    def ask(self, text: str, model: str | None = None, images: list[dict] | None = None) -> AskResponse:
+        """A question in plain words: the model's readings of it, each answer with what was said, and the work."""
+        body = {"model": model, "input": text, **({"images": images} if images else {})}
+        return AskResponse.model_validate(self._send("POST", "/v1/ask", body).json())
 
     def predict(self, rows: list[dict], model: str | None = None) -> list[dict]:
         """Every row answered in order: `{"id"?, "answers": {id: Answer}}`, or `{"id"?, "error": {...}}` for

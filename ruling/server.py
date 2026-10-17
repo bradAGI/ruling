@@ -25,6 +25,7 @@ from pydantic import BaseModel, Field, ValidationError
 from starlette.datastructures import Headers
 from starlette.types import ASGIApp, Receive, Scope, Send
 
+from ruling.ask import AskRequest, AskResponse, ask, writer_for
 from ruling.config import Settings
 from ruling.engine import InputTooLong
 from ruling.evals import Record, as_record, collect, predict, report
@@ -281,6 +282,22 @@ def create_app(registry: Registry, api_key: str | None, max_pending: int,
         if ledger is not None and not request.exclude_from_training:
             response = response.model_copy(update={"id": await run_in_threadpool(ledger.record, request, response)})
         return response
+
+    @app.post("/v1/ask", response_model=AskResponse, response_model_exclude_none=True, dependencies=[Depends(authorize)])
+    async def ask_in_words(request: AskRequest) -> AskResponse:
+        """A question in plain words, read as typed questions and answered with the work shown."""
+        name, engine = resolve(request.model)
+        if request.images:
+            try:
+                check_readable(request.images, engine.reads_images)
+            except UnsupportedModality as exc:
+                raise ApiError(422, "unsupported_modality", f"{name}: {exc}", "images") from exc
+        with admission.slot() as elapsed, engine_errors():
+            response = await run_in_threadpool(ask, engine, writer_for(engine), request.input, request.images)
+        usage.record(name, 1, response.usage.input_tokens)
+        log.info("ask model=%s readings=%s answers=%d input_tokens=%d ms=%.0f",
+                 name, ",".join(response.readings), len(response.answers), response.usage.input_tokens, elapsed() * 1000)
+        return response.model_copy(update={"model": name}) if name != registry.default else response
 
     @app.post("/v1/predict", dependencies=[Depends(authorize)])
     async def predict_rows(request: BatchRequest) -> dict:
