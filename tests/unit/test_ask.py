@@ -81,7 +81,7 @@ def test_several_questions_go_whole_to_the_writer_with_every_tool():
 def test_the_writers_reply_is_read_leniently_but_checked_strictly():
     reply = '''Sure! ```json
 {"calls": [
-  {"tool": "choice", "instructions": "Which editor is best?", "options": {"Vim": "modal", "Emacs": "lisp", "VS Code": null}},
+  {"tool": "choice", "instructions": "Which editor is best?", "options": ["Vim: modal", "Emacs: lisp", "VS Code"]},
   {"tool": "noul", "instructions": "Is \\"C++\\" better than C#?", "yes_means": "C++ is better", "no_means": "C# is better"},
   {"tool": "score", "instructions": "How many?", "levels": ["none", "1 to 2", "more than 2"]},
   {"tool": "choice", "instructions": "One option", "options": {"only": "one"}},
@@ -99,9 +99,27 @@ def test_the_writers_reply_is_read_leniently_but_checked_strictly():
                               "call 4: a choice takes 2 to 8 options, got 1"]
 
 
+def test_a_list_closed_with_a_brace_or_an_object_with_a_bracket_is_read_as_meant():
+    # The two slips a 4B makes: `"]}` for a list of options, and `}]` for the object around one.
+    reply = ('{"calls": [{"tool": "choice", "instructions": "Which?", "options": ["Vim: modal", "Emacs: lisp"}]}, '
+             '{"tool": "noul", "instructions": "Is it? [a]", "yes_means": "y", "no_means": "n"]]}')
+    drafts = parse_drafts(reply, ("choice", "noul"))
+    assert [q.type for q in drafts.questions.values()] == ["choice", "noul"] and drafts.dropped == []
+    assert drafts.questions["q1"].criteria == {"Vim": "modal", "Emacs": "lisp"}
+    assert drafts.questions["q2"].instructions == "Is it? [a]"      # brackets inside strings are left alone
+
+
+def test_calls_before_the_token_cap_are_kept_and_the_cut_off_one_is_named():
+    reply = ('{"calls": [{"tool": "choice", "instructions": "Which?", "options": ["Vim: modal", "Emacs: lisp"]}, '
+             '{"tool": "noul", "instructions": "Is it?", "yes_means": "y", "no_means": "n"}, {"tool": "sc')
+    drafts = parse_drafts(reply, ("choice", "noul"))
+    assert [q.type for q in drafts.questions.values()] == ["choice", "noul"]
+    assert drafts.dropped == ["call 3 does not parse"]
+
+
 @pytest.mark.parametrize("reply, reason", [
     ("I cannot help with that.", "no JSON object"),
-    ('{"calls": [1, 2}', "does not parse"),
+    ('{"calls": [1, 2,]}', "does not parse"),
     ('{"calls": "none"}', "not a list"),
 ])
 def test_a_reply_without_usable_calls_says_why(reply, reason):

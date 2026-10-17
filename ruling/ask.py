@@ -122,10 +122,10 @@ and the last is open-ended ("more than 5"). Name each level by a range or a word
 - Use one question. Use more only when the input plainly asks several separate things, and never more than 4.
 - Write "instructions" as one clear question. The decision model sees the person's input beside it, and nothing else.
 
-Reply with exactly this shape:
+Reply with exactly this shape, one object per question:
 {"calls": [
   {"tool": "noul", "instructions": "...", "yes_means": "...", "no_means": "..."},
-  {"tool": "choice", "instructions": "...", "options": {"label": "one-line description", "...": "..."}},
+  {"tool": "choice", "instructions": "...", "options": ["label: one-line description", "label: description"]},
   {"tool": "score", "instructions": "...", "levels": ["lowest", "...", "highest"]}
 ]}"""
 
@@ -254,23 +254,65 @@ class Drafts:
 
 def parse_drafts(reply: str, allowed: tuple[str, ...]) -> Drafts:
     """The questions in a writer's reply, each checked, and what was left out and why."""
-    match = re.search(r"\{.*\}", reply, re.S)
-    if match is None:
-        return Drafts({}, ["the writer wrote no JSON object"])
-    try:
-        calls = json.loads(match.group(0)).get("calls", [])
-    except (json.JSONDecodeError, AttributeError) as error:
-        return Drafts({}, [f"the writer's JSON does not parse: {error}"])
-    if not isinstance(calls, list):
-        return Drafts({}, ["the writer's `calls` is not a list"])
+    calls, dropped = calls_in(reply)
     questions: dict[str, Question] = {}
-    dropped = [f"call {i + 1} is over the cap of {MAX_DRAFTS}" for i in range(MAX_DRAFTS, len(calls))]
+    dropped += [f"call {i + 1} is over the cap of {MAX_DRAFTS}" for i in range(MAX_DRAFTS, len(calls))]
     for i, call in enumerate(calls[:MAX_DRAFTS]):
         try:
             questions[f"q{i + 1}"] = draft(call, allowed)
         except ValueError as error:
             dropped.append(f"call {i + 1}: {error}")
     return Drafts(questions, dropped)
+
+
+def calls_in(reply: str) -> tuple[list, list[str]]:
+    """The writer's calls: the whole object when it parses, else each call that parses on its own.
+
+    A small model closes a brace with a bracket now and then, or runs on past the token cap; the
+    calls before the slip are still good questions."""
+    reply = closers_matched(reply)
+    match = re.search(r"\{.*\}", reply, re.S)
+    if match is None:
+        return [], ["the writer wrote no JSON object"]
+    try:
+        calls = json.loads(match.group(0)).get("calls", [])
+        return (calls, []) if isinstance(calls, list) else ([], ["the writer's `calls` is not a list"])
+    except (json.JSONDecodeError, AttributeError) as error:
+        whole = f"the writer's JSON does not parse: {error}"
+    decoder = json.JSONDecoder()
+    calls, dropped = [], []
+    for i, start in enumerate(re.finditer(r"\{\s*\"tool\"", reply)):
+        try:
+            call, _ = decoder.raw_decode(reply, start.start())
+            calls.append(call)
+        except json.JSONDecodeError:
+            dropped.append(f"call {i + 1} does not parse")
+    return calls, ([whole] if not calls else []) + dropped
+
+
+def closers_matched(text: str) -> str:
+    """The text with every `}` or `]` that closes the other kind of bracket replaced by the right one.
+
+    The one slip small models make in this shape is closing a list with a brace or an object with a
+    bracket; the structure they meant is unambiguous from what was opened, so it is restored."""
+    out, stack, in_string, escaped = [], [], False, False
+    for char in text:
+        if in_string:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == '"':
+                in_string = False
+        elif char == '"':
+            in_string = True
+        elif char in "{[":
+            stack.append(char)
+        elif char in "}]":
+            if stack:
+                char = "}" if stack.pop() == "{" else "]"
+        out.append(char)
+    return "".join(out)
 
 
 def draft(call: object, allowed: tuple[str, ...]) -> Question:
@@ -288,9 +330,10 @@ def draft(call: object, allowed: tuple[str, ...]) -> Question:
     if tool == "choice":
         options = call.get("options")
         if isinstance(options, list):
-            options = {str(o): None for o in options}
+            # "label: description" strings, or bare labels; a map of label to description is taken too.
+            options = dict(labeled(str(o)) for o in options)
         if not isinstance(options, dict) or not all(isinstance(k, str) and k.strip() for k in options):
-            raise ValueError("options must be a map of label to description")
+            raise ValueError("options must be a list of 'label: description' strings")
         if not WRITER_OPTIONS[0] <= len(options) <= WRITER_OPTIONS[1]:
             raise ValueError(f"a choice takes {WRITER_OPTIONS[0]} to {WRITER_OPTIONS[1]} options, got {len(options)}")
         return Choice(instructions=instructions,
@@ -301,6 +344,11 @@ def draft(call: object, allowed: tuple[str, ...]) -> Question:
     if not WRITER_LEVELS[0] <= len(levels) <= WRITER_LEVELS[1]:
         raise ValueError(f"a score takes {WRITER_LEVELS[0]} to {WRITER_LEVELS[1]} levels, got {len(levels)}")
     return Score(instructions=instructions, criteria=[level.strip() for level in levels])
+
+
+def labeled(option: str) -> tuple[str, str | None]:
+    label, sep, description = option.partition(": ")
+    return label.strip(), (description.strip() or None) if sep else None
 
 
 def text_field(call: dict, name: str) -> str:
