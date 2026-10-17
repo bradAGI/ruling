@@ -165,24 +165,35 @@ class AskResponse(BaseModel):
 
 
 class Writer(Protocol):
-    def write(self, text: str, allowed: tuple[str, ...]) -> str: ...
+    def write(self, text: str, allowed: tuple[str, ...], images: list[Image] | None = None) -> str: ...
+
+
+def writer_messages(text: str, allowed: tuple[str, ...], pictures: int, sees: bool) -> list[dict]:
+    """The writer's system prompt with its leash, and the input, saying what pictures came with it."""
+    leash = "" if set(allowed) == set(KIND_OF_TOOL) else f"\nWrite only these tools: {', '.join(allowed)}."
+    about = ""
+    if pictures:
+        names = ", ".join(f"<image {n}>" for n in range(1, pictures + 1))
+        seen = "shown to you here" if sees else "which you cannot see"
+        about = (f"\nThe input comes with {pictures} picture{'s' if pictures > 1 else ''}, {seen}; the decision model "
+                 f"sees {'them' if pictures > 1 else 'it'}. Write the question about what the input asks of the "
+                 f"picture, naming it as {names}.")
+    return [{"role": "system", "content": WRITER_SYSTEM + leash + about}, {"role": "user", "content": f"Input: {text}"}]
 
 
 class LocalWriter:
-    """The served model writing a tool call, with its thinking off and sampling at zero."""
+    """The served text model writing a tool call, with its thinking off and sampling at zero."""
 
     def __init__(self, engine):
         self.engine = engine
 
-    def write(self, text: str, allowed: tuple[str, ...]) -> str:
+    def write(self, text: str, allowed: tuple[str, ...], images: list[Image] | None = None) -> str:
         from mlx_lm import batch_generate
         from mlx_lm.sample_utils import make_sampler
 
         from ruling.engine import TEMPLATE_KWARGS
 
-        leash = "" if set(allowed) == set(KIND_OF_TOOL) else f"\nWrite only these tools: {', '.join(allowed)}."
-        messages = [{"role": "system", "content": WRITER_SYSTEM + leash},
-                    {"role": "user", "content": f"Input: {text}"}]
+        messages = writer_messages(text, allowed, len(images or []), sees=False)
         tokens = self.engine.tokenizer.apply_chat_template(messages, add_generation_prompt=True, **TEMPLATE_KWARGS)
         with self.engine._lock:
             self.engine._activate()
@@ -190,10 +201,36 @@ class LocalWriter:
                                   sampler=make_sampler(temp=0.0)).texts[0]
 
 
-def writer_for(engine) -> Writer | None:
-    """The writer an engine can supply: a local text model writes with its own weights; others cannot write."""
-    from ruling.engine import Engine  # imported here so the client, which shares this module's models, stays light
+class VisionWriter:
+    """The served vision model writing a tool call with the pictures in front of it."""
 
+    def __init__(self, engine):
+        self.engine = engine
+
+    def write(self, text: str, allowed: tuple[str, ...], images: list[Image] | None = None) -> str:
+        from mlx_vlm import generate
+        from mlx_vlm.prompt_utils import apply_chat_template
+
+        from ruling.engine import TEMPLATE_KWARGS
+        from ruling.vision import _picture
+
+        pictures = [_picture(n, image) for n, image in enumerate(images or [], 1)]
+        messages = writer_messages(text, allowed, len(pictures), sees=True)
+        prompt = apply_chat_template(self.engine.processor, self.engine.vlm.config, messages,
+                                     num_images=len(pictures), **TEMPLATE_KWARGS)
+        with self.engine._lock:
+            return generate(self.engine.vlm, self.engine.processor, prompt, image=pictures or None,
+                            max_tokens=WRITER_TOKENS, temperature=0.0).text
+
+
+def writer_for(engine) -> Writer | None:
+    """The writer an engine can supply: a local model writes with its own weights, seeing the pictures when it
+    is a vision model; a hosted or decision-server model cannot write."""
+    from ruling.engine import Engine  # imported here so the client, which shares this module's models, stays light
+    from ruling.vision import VisionEngine
+
+    if type(engine) is VisionEngine:
+        return VisionWriter(engine)
     return LocalWriter(engine) if type(engine) is Engine else None
 
 
@@ -401,7 +438,7 @@ def ask(engine, writer: Writer | None, text: str, images: list[Image] | None = N
             if writer is None:
                 dropped.append("this model cannot write options; serve a local text model to draft them")
             else:
-                wrote = writer.write(text, settled.wanted)
+                wrote = writer.write(text, settled.wanted, images)
                 drafts = parse_drafts(wrote, settled.wanted)
                 dropped.extend(drafts.dropped)
                 if drafts.questions:

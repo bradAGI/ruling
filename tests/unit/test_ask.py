@@ -1,5 +1,6 @@
 """A plain question becomes typed questions: the rules, the writer's leash, and what is said."""
 
+import base64
 import json
 
 import numpy as np
@@ -166,12 +167,14 @@ class ScriptedWriter:
     def __init__(self, reply: str):
         self.reply, self.calls = reply, []
 
-    def write(self, text, allowed):
-        self.calls.append((text, allowed))
+    def write(self, text, allowed, images=None):
+        self.calls.append((text, allowed, images))
         return self.reply
 
 
 PICK = {"kind": [0.05, 0.9, 0.03, 0.02]}
+# A 1x1 PNG, the smallest readable picture.
+PNG = base64.b64decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==")
 A_QUESTION = {FACTS["answerable"].instructions: 0.95, FACTS["whole"].instructions: 0.9, FACTS["fit"].instructions: 0.9,
               FACTS["several"].instructions: 0.1, FACTS["scale"].instructions: 0.1}
 
@@ -181,7 +184,7 @@ def test_a_pick_is_written_judged_and_checked_and_the_page_can_see_all_of_it():
                             {**PICK, "q1": [0.7, 0.3]})
     writer = ScriptedWriter('{"calls": [{"tool": "choice", "instructions": "Which editor?", "options": {"Vim": "a", "Emacs": "b"}}]}')
     response = ask(engine, writer, "what is the best text editor")
-    assert writer.calls == [("what is the best text editor", ("choice",))]
+    assert writer.calls == [("what is the best text editor", ("choice",), None)]
     [shown] = response.answers
     assert shown.kind == "pick_one" and shown.source == "writer" and shown.said == "Vim." and shown.checked == 0.85
     assert shown.question.criteria == {"Vim": "a", "Emacs": "b"}
@@ -189,6 +192,21 @@ def test_a_pick_is_written_judged_and_checked_and_the_page_can_see_all_of_it():
     # Three requests: the facts, the draft, the check; usage counts every question of each.
     assert [list(r.questions) for r in engine.requests] == [list(FACTS), ["q1"], ["check_0"]]
     assert response.usage.input_tokens == len(FACTS) + 2
+
+
+def test_pictures_reach_every_request_and_the_writer():
+    from ruling.ask import writer_messages
+    from ruling.questions import Image as ImageBlock
+    picture = ImageBlock(type="image", media_type="image/png", data=base64.b64encode(PNG).decode())
+    engine = ScriptedEngine(A_QUESTION, {**PICK, "q1": [0.2, 0.8]})
+    writer = ScriptedWriter('{"calls": [{"tool": "choice", "instructions": "What is in <image 1>?", "options": ["cat", "dog"]}]}')
+    response = ask(engine, writer, "what is this?", [picture])
+    assert writer.calls[0][2] == [picture]
+    assert all(r.state == {"input": "what is this?", "images": [picture.model_dump()]} for r in engine.requests)
+    assert response.answers[0].said == "dog."
+    seen, unseen = writer_messages("x", ("choice",), 2, sees=True)[0]["content"], writer_messages("x", ("choice",), 1, sees=False)[0]["content"]
+    assert "<image 1>, <image 2>" in seen and "shown to you" in seen and "cannot see" in unseen
+    assert "picture" not in writer_messages("x", ("choice",), 0, sees=True)[0]["content"]
 
 
 def test_without_a_writer_a_pick_says_so_instead_of_answering_wrong():

@@ -23,7 +23,7 @@
   .meta { color: var(--muted); font-size: 12px; }
   .err { color: var(--accent); }
   a { color: inherit; }
-  #thumbs { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
+  #thumbs, .thumbs { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
   .thumb { position: relative; width: 220px; max-width: 100%; font-size: 12px; color: var(--muted); }
   /* The whole image, scaled to fit, so a receipt's text or a photo's edge stays readable before deciding. */
   .thumb img { display: block; width: 100%; height: 220px; object-fit: contain; background: var(--line); border: 1px solid var(--line); border-radius: 4px; }
@@ -87,6 +87,10 @@
   <div style="grid-column: 1 / -1">
     <label for="question">a question in plain words; the model reads it as typed questions and answers those</label>
     <textarea id="question">is a hot dog a sandwich?</textarea>
+    <label for="ask-images">pictures the question is about, named &lt;image 1&gt;, &lt;image 2&gt;, … in order</label>
+    <input type="file" id="ask-images" accept="image/png,image/jpeg,image/webp" multiple>
+    <div id="ask-images-note" class="meta"></div>
+    <div id="ask-thumbs" class="thumbs"></div>
   </div>
   <button id="ask-run">Ask</button>
   <div id="ask-out"></div>
@@ -96,6 +100,7 @@
 const out = document.getElementById("out");
 const model = document.getElementById("model");
 const picker = document.getElementById("images");
+const askPicker = document.getElementById("ask-images");
 const thumbs = document.getElementById("thumbs");
 const stateBox = document.getElementById("state");
 const modalities = {};
@@ -150,22 +155,36 @@ function withImages(state) {
   return state && typeof state === "object" && !Array.isArray(state) ? { ...state, images } : { text: state, images };
 }
 function showThumbs() {
-  const first = countImages(parseState(stateBox.value)) + 1;
-  thumbs.innerHTML = "";
-  picked.forEach((image, i) => {
-    const box = document.createElement("div");
-    box.className = "thumb";
-    box.innerHTML = `<img alt=""><span>&lt;image ${first + i}&gt;</span><button type="button" aria-label="remove">×</button>`;
-    box.querySelector("img").src = `data:${image.media_type};base64,${image.data}`;
-    box.querySelector("button").onclick = () => { picked.splice(i, 1); showThumbs(); };
-    thumbs.appendChild(box);
-  });
+  drawThumbs(thumbs, picked, countImages(parseState(stateBox.value)) + 1, i => { picked.splice(i, 1); showThumbs(); });
 }
 function showModalities() {
   const sees = (modalities[model.value] || []).includes("image");
+  const note = sees ? "" : "this model reads text only; serve a vision: model to ask about images";
   picker.disabled = !sees;
   document.getElementById("image-example").disabled = !sees;
-  document.getElementById("images-note").textContent = sees ? "" : "this model reads text only; serve a vision: model to ask about images";
+  document.getElementById("images-note").textContent = note;
+  askPicker.disabled = !sees;
+  document.getElementById("ask-images-note").textContent = note;
+}
+function readFiles(input) {
+  const read = file => new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve({ media_type: file.type, data: reader.result.split(",", 2)[1] });
+    reader.onerror = () => reject(reader.error);
+    reader.readAsDataURL(file);
+  });
+  return Promise.all([...input.files].map(read));
+}
+function drawThumbs(box, images, first, remove) {
+  box.innerHTML = "";
+  images.forEach((image, i) => {
+    const thumb = document.createElement("div");
+    thumb.className = "thumb";
+    thumb.innerHTML = `<img alt=""><span>&lt;image ${first + i}&gt;</span><button type="button" aria-label="remove">×</button>`;
+    thumb.querySelector("img").src = `data:${image.media_type};base64,${image.data}`;
+    thumb.querySelector("button").onclick = () => remove(i);
+    box.appendChild(thumb);
+  });
 }
 // An example to try with a model that reads images: a receipt drawn here, so the page ships no image file.
 const IMAGE_STATE = {"note": "The customer says order 4471 was charged twice and attached the receipt."};
@@ -202,13 +221,7 @@ document.getElementById("image-example").onclick = loadImageExample;
 model.onchange = showModalities;
 stateBox.oninput = showThumbs;
 picker.onchange = async () => {
-  const read = file => new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve({ media_type: file.type, data: reader.result.split(",", 2)[1] });
-    reader.onerror = () => reject(reader.error);
-    reader.readAsDataURL(file);
-  });
-  picked = picked.concat(await Promise.all([...picker.files].map(read)));
+  picked = picked.concat(await readFiles(picker));
   picker.value = "";
   showThumbs();
 };
@@ -241,6 +254,15 @@ document.getElementById("run").onclick = async () => {
 };
 // The ask tab: one question in words, the typed questions it became, and every answer with its check.
 const askOut = document.getElementById("ask-out");
+let askPicked = [];
+function showAskThumbs() {
+  drawThumbs(document.getElementById("ask-thumbs"), askPicked, 1, i => { askPicked.splice(i, 1); showAskThumbs(); });
+}
+askPicker.onchange = async () => {
+  askPicked = askPicked.concat(await readFiles(askPicker));
+  askPicker.value = "";
+  showAskThumbs();
+};
 const tabs = { decide: document.getElementById("decide"), ask: document.getElementById("ask") };
 function showTab(name) {
   for (const [tab, section] of Object.entries(tabs)) {
@@ -282,6 +304,7 @@ function askHtml(data, ms) {
 document.getElementById("ask-run").onclick = async () => {
   askOut.innerHTML = '<div class="meta">asking…</div>';
   const body = { model: model.value, input: document.getElementById("question").value };
+  if (askPicked.length) body.images = askPicked.map(({ media_type, data }) => ({ type: "image", media_type, data }));
   const started = performance.now();
   const res = await fetch("/v1/ask", { method: "POST", headers: { "content-type": "application/json", ...auth() },
                                        body: JSON.stringify(body) });
@@ -297,7 +320,7 @@ document.getElementById("ask-run").onclick = async () => {
     stateBox.value = JSON.stringify({ input: data.input }, null, 2);
     if (!Object.keys(questions).length) questions.yes = { type: "noul", instructions: "Answer the question in the input." };
     document.getElementById("questions").value = JSON.stringify(questions, null, 2);
-    picked = [];
+    picked = askPicked.slice();
     showThumbs();
     showTab("decide");
   };

@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from ruling.ask import FACTS, LocalWriter, ask, plan, readings_of, writer_for
+from ruling.ask import FACTS, LocalWriter, VisionWriter, ask, plan, readings_of, writer_for
 from ruling.cli import main
 from ruling.questions import SystemOneRequest
 
@@ -71,3 +71,33 @@ def test_the_command_line_takes_a_question_in_words(capsys):
     main(["ask", "can penguins fly", "--model", TEST_MODEL, "--rotations", "1"])
     body = json.loads(capsys.readouterr().out)
     assert set(body["facts"]) == set(FACTS) and body["input"] == "can penguins fly"
+
+
+@pytest.fixture(scope="module")
+def red_square():
+    import base64
+    import io
+
+    from PIL import Image as Picture
+
+    from ruling.questions import Image
+
+    buffer = io.BytesIO()
+    Picture.new("RGB", (64, 64), (220, 30, 30)).save(buffer, format="PNG")
+    return Image(type="image", media_type="image/png", data=base64.b64encode(buffer.getvalue()).decode())
+
+
+def test_a_question_about_a_picture_is_read_written_and_judged_with_the_picture_in_view(red_square):
+    from ruling.calibration import Calibration
+    from ruling.vision import VISION_PREFIX, VisionEngine
+
+    vision = VisionEngine(VISION_PREFIX + TEST_MODEL, Calibration(), max_input_tokens=8192, rotations=1,
+                          prior_debias=False, max_image_tokens=256)
+    writer = writer_for(vision)
+    assert isinstance(writer, VisionWriter)
+    reply = writer.write("what color is the square in the picture?", ("choice",), [red_square])
+    assert reply.strip()
+    response = ask(vision, writer, "what color is the square in the picture?", [red_square])
+    assert set(response.facts) == set(FACTS) and response.usage.input_tokens > 0
+    if plan(response.facts).wanted:
+        assert response.wrote is not None

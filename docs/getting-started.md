@@ -72,6 +72,12 @@ model stands by it. Under the answer, "how it got there" shows all nine
 readings and the writer's reply byte for byte, and **open in decide** puts
 the typed questions behind the answer into the decide tab to read or change.
 
+A question can come with pictures: pick them under the question box on a
+`vision:` model, and they travel with the input as `<image 1>`, `<image 2>`,
+… Every reading is made with the pictures in view, and a vision model writes
+the options with them in front of it, so "what is this?" of a photo becomes a
+pick over what it sees.
+
 ```bash
 ruling ask "is a hot dog a sandwich?"        # the same, without a server; prints the whole reading as JSON
 ```

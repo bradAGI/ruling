@@ -156,3 +156,20 @@ def test_the_ask_tab_answers_in_words_and_opens_its_typed_questions_in_decide(pa
     assert json.loads(page.input_value("#state")) == {"input": "can penguins fly"}
     questions = json.loads(page.input_value("#questions"))
     assert questions and all(q["type"] in ("noul", "choice", "score") for q in questions.values())
+
+
+def test_the_ask_tab_sends_a_picked_picture_with_the_question(page: Page, served, tmp_path):
+    photo = tmp_path / "square.png"
+    Image.new("RGB", (48, 48), (20, 20, 220)).save(photo)
+    page.goto(served)
+    page.select_option("#model", "vision")
+    page.click("#tab-ask")
+    page.set_input_files("#ask-images", str(photo))
+    page.wait_for_selector("#ask-thumbs .thumb")
+    page.fill("#question", "what color is the square in the picture?")
+    with page.expect_request("**/v1/ask") as sent, page.expect_response("**/v1/ask") as answered:
+        page.click("#ask-run")
+    [image] = sent.value.post_data_json["images"]
+    assert image["type"] == "image" and image["media_type"] == "image/png" and answered.value.status == 200
+    page.select_option("#model", "text")
+    assert page.is_disabled("#ask-images")

@@ -528,8 +528,11 @@ forms it accepts and what happens to the decisions afterward.
 {"model": "optional", "input": "is a hot dog a sandwich?", "images": "optional, image blocks the question is about"}
 ```
 
-A question in plain words. The response carries the model's reading of it and
-every answer with its work:
+A question in plain words, with `images` as the blocks `/v1/systemone` takes
+when it is about pictures; they are put in the state beside the input and
+named `<image 1>`, `<image 2>`, … in every question, and a model that reads
+only text refuses them with 422 `unsupported_modality`. The response carries
+the model's reading of it and every answer with its work:
 
 | Field | Meaning |
 |---|---|
@@ -549,9 +552,11 @@ from the `yes` fact, a how-likely from `chance`, a how-much from `degree`
 unless `scale` says it needs its own units, in which case the writer drafts
 the scale; a pick has the writer draft 2 to 8 options. The writer may draft
 at most 4 questions and only of the kinds asked for; anything else it writes
-is listed under `dropped`. A model that cannot write (every engine but a
-local text model) answers the direct readings and reports the rest as
-dropped. The request counts as one decision in `GET /v1/usage`.
+is listed under `dropped`. The writer is the served model: a local text
+model writes from the words, a `vision:` model writes with the pictures in
+front of it, and a hosted or decision-server model cannot write, so it
+answers the direct readings and reports the rest as dropped. The request
+counts as one decision in `GET /v1/usage`.
 
 ### POST /v1/predict and POST /v1/evaluations
 
