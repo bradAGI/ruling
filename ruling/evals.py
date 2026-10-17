@@ -42,6 +42,7 @@ from ruling.engine import InputTooLong
 from ruling.metrics import decision_metrics
 from ruling.questions import (
     MAX_CHOICE_OPTIONS,
+    Box,
     Choice,
     InvalidOptions,
     Noul,
@@ -52,6 +53,7 @@ from ruling.questions import (
     UnsupportedModality,
     check_askable,
     check_images,
+    check_locatable,
     check_readable,
     option_keys,
 )
@@ -262,24 +264,26 @@ def collect(engine, records: list[Record], extra_references: dict[tuple[int, str
     """
     observations = []
     for index, record in enumerate(records):
+        # A box has no distribution to score against a label; evaluations read past it.
+        questions = {qid: q for qid, q in record.questions.items() if not isinstance(q, Box)}
         started = time.perf_counter()
         try:
-            scored = engine.score(record.state, record.questions)
+            scored = engine.score(record.state, questions)
         except InputTooLong:
             observations += [Observation(record=index, question_id=qid, question_type=q.type, family=record.family,
                                          keys=option_keys(q), logits=None,
                                          label=label_index(q, record.labels[qid]) if qid in record.labels else None,
                                          references={}, reversed_argmax=None)
-                             for qid, q in record.questions.items()]
+                             for qid, q in questions.items()]
             continue
         reversed_questions = {
             qid: Choice(instructions=q.instructions, criteria=dict(reversed(list(q.criteria.items()))))
-            for qid, q in record.questions.items()
+            for qid, q in questions.items()
             if isinstance(q, Choice)
         }
         latency_ms = (time.perf_counter() - started) * 1000
         reversed_scored = engine.score(record.state, reversed_questions) if reversed_questions else None
-        for qid, question in record.questions.items():
+        for qid, question in questions.items():
             raw = scored.raw[qid]
             reversed_argmax = None
             if qid in reversed_questions:
@@ -444,6 +448,7 @@ def predict(engine, records: list[Record]) -> Iterator[dict]:
         try:
             check_askable(record.questions, engine.max_options)
             check_readable(record.state, engine.reads_images)
+            check_locatable(record.questions, record.state, engine.locates)
             response = engine.evaluate(SystemOneRequest(state=record.state, questions=record.questions))
             line["answers"] = {qid: a.model_dump(mode="json") for qid, a in response.answers.items()}
         except InputTooLong as exc:

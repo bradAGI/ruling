@@ -4,6 +4,7 @@ usage counts, model listing, health, and a playground page."""
 from __future__ import annotations
 
 import gzip
+import json
 import logging
 from importlib.metadata import version
 import math
@@ -22,14 +23,19 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, Field, ValidationError
-from starlette.datastructures import Headers
+from starlette.datastructures import Headers, UploadFile
 from starlette.types import ASGIApp, Receive, Scope, Send
+
+try:
+    from compression.zstd import ZstdError, decompress as zstd_decompress
+except ImportError:  # before Python 3.14 the same module ships as a backport
+    from backports.zstd import ZstdError, decompress as zstd_decompress
 
 from ruling.ask import AskRequest, AskResponse, ask, writer_for
 from ruling.config import Settings
-from ruling.engine import InputTooLong
+from ruling.engine import InputTooLong, extended_context
 from ruling.evals import Record, as_record, collect, predict, report
-from ruling.hosted import HostUnavailable
+from ruling.hosted import LONG_CONTEXT_HEADER, HostUnavailable
 from ruling.ledger import DecisionLedger, Outcome, UnknownDecision
 from ruling.questions import (
     MAX_PREDICT_ROWS,
@@ -39,7 +45,9 @@ from ruling.questions import (
     SystemOneResponse,
     UnsupportedModality,
     check_askable,
+    check_locatable,
     check_readable,
+    resolve_assets,
 )
 from ruling.registry import Registry, UnknownModel
 from ruling.retrain import CURRENT, history
@@ -118,15 +126,39 @@ class Admission:
             self.leave(elapsed())
 
 
-class GzipRequests:
-    """Inflates a request body sent with `Content-Encoding: gzip`, so a client can shrink a large batch."""
+MAX_BODY_BYTES = 32 * 2**20
+"""The hosted API's request limit, inflated; a body over it is 413 before anything reads it."""
+
+DECODERS = {"gzip": gzip.decompress, "x-gzip": gzip.decompress, "zstd": zstd_decompress}
+"""The content encodings a request body may come in: what the hosted API takes, and what its SDKs send."""
+
+
+class CompressedRequests:
+    """Inflates a request body sent with a `Content-Encoding` the server knows, so a client can shrink a
+    large batch, and so the hosted API's SDKs, which compress with zstd on their own, are read as sent."""
 
     def __init__(self, app: ASGIApp):
         self.app = app
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
-        if scope["type"] != "http" or Headers(scope=scope).get("content-encoding") != "gzip":
+        if scope["type"] != "http":
             await self.app(scope, receive, send)
+            return
+        headers = Headers(scope=scope)
+        encoding = headers.get("content-encoding")
+        if encoding is None:
+            declared = headers.get("content-length")
+            if declared is not None and declared.isdigit() and int(declared) > MAX_BODY_BYTES:
+                await self._refuse(ApiError(413, "body_too_large", f"the body is over {MAX_BODY_BYTES >> 20} MiB"),
+                                   scope, receive, send)
+                return
+            await self.app(scope, receive, send)
+            return
+        decode = DECODERS.get(encoding.lower())
+        if decode is None:
+            await self._refuse(ApiError(415, "unsupported_encoding",
+                                        f"Content-Encoding {encoding!r} is not one of {', '.join(DECODERS)}"),
+                               scope, receive, send)
             return
         packed = b""
         while True:
@@ -135,17 +167,68 @@ class GzipRequests:
             if not message.get("more_body"):
                 break
         try:
-            body = gzip.decompress(packed)
-        except (gzip.BadGzipFile, EOFError, zlib.error) as exc:
-            await ApiError(422, "invalid_input", f"the body is not valid gzip: {exc}").response()(scope, receive, send)
+            body = decode(packed)
+        except (gzip.BadGzipFile, EOFError, zlib.error, ZstdError) as exc:
+            await self._refuse(ApiError(422, "invalid_input", f"the body is not valid {encoding}: {exc}"),
+                               scope, receive, send)
             return
-        headers = [(k, v) for k, v in scope["headers"] if k not in (b"content-encoding", b"content-length")]
-        headers.append((b"content-length", str(len(body)).encode()))
+        if len(body) > MAX_BODY_BYTES:
+            await self._refuse(ApiError(413, "body_too_large", f"the body inflates to over {MAX_BODY_BYTES >> 20} MiB"),
+                               scope, receive, send)
+            return
+        raw = [(k, v) for k, v in scope["headers"] if k not in (b"content-encoding", b"content-length")]
+        raw.append((b"content-length", str(len(body)).encode()))
 
         async def receive_inflated() -> dict:
             return {"type": "http.request", "body": body, "more_body": False}
 
-        await self.app({**scope, "headers": headers}, receive_inflated, send)
+        await self.app({**scope, "headers": raw}, receive_inflated, send)
+
+    @staticmethod
+    async def _refuse(error: ApiError, scope: Scope, receive: Receive, send: Send) -> None:
+        await error.response()(scope, receive, send)
+
+
+def invalid(exc: ValidationError | RequestValidationError) -> ApiError:
+    """A schema violation as the API reports it: the first error's message, and the field it names."""
+    first, *rest = exc.errors()
+    loc = first["loc"][1:] if isinstance(exc, RequestValidationError) else first["loc"]
+    param = ".".join(str(part) for part in loc) or None
+    message = first["msg"] + (f" (and {len(rest)} more)" if rest else "")
+    return ApiError(422, "invalid_input", message, param)
+
+
+async def read_decision(request: Request) -> SystemOneRequest:
+    """The decision a request carries: a JSON body, or a multipart form whose `request` part is the JSON
+    and whose other parts are the asset bytes it names, as the hosted API's SDKs send images."""
+    parts: dict[str, bytes] = {}
+    if request.headers.get("content-type", "").startswith("multipart/form-data"):
+        form = await request.form()
+        if "request" not in form:
+            raise ApiError(422, "invalid_input", "a multipart body needs a 'request' part holding the JSON", "request")
+        for name, value in form.multi_items():
+            if isinstance(value, UploadFile):
+                parts[name] = await value.read()
+        text = parts.pop("request", None)
+        text = form["request"] if text is None else text
+    else:
+        text = await request.body()
+    try:
+        body = json.loads(text)
+    except ValueError as exc:
+        raise ApiError(422, "invalid_input", f"the request is not valid JSON: {exc}") from exc
+    try:
+        decision = SystemOneRequest.model_validate(body)
+    except ValidationError as exc:
+        raise invalid(exc) from exc
+    try:
+        return resolve_assets(decision, parts)
+    except ValueError as exc:
+        raise ApiError(422, "invalid_input", str(exc), "assets") from exc
+
+
+def asked_for_long_context(request: Request) -> bool:
+    return request.headers.get(LONG_CONTEXT_HEADER, "").lower() == "true"
 
 
 class BatchRequest(BaseModel):
@@ -204,6 +287,7 @@ def labeled_records(engine, rows: list[Any]) -> list[Record]:
             record = parse_row(row)
             check_askable(record.questions, engine.max_options)
             check_readable(record.state, engine.reads_images)
+            check_locatable(record.questions, record.state, engine.locates)
         except ValueError as exc:
             raise ApiError(422, param=f"rows.{index}", **row_error(exc)) from exc
         records.append(record)
@@ -215,7 +299,7 @@ def labeled_records(engine, rows: list[Any]) -> list[Record]:
 def create_app(registry: Registry, api_key: str | None, max_pending: int,
                ledger: DecisionLedger | None = None, usage: UsageMeter | None = None) -> FastAPI:
     app = FastAPI(title="ruling", version=version("ruling"))
-    app.add_middleware(GzipRequests)
+    app.add_middleware(CompressedRequests)
     bearer = HTTPBearer(auto_error=False)
     admission = Admission(max_pending)
     usage = usage if usage is not None else UsageMeter()
@@ -253,25 +337,35 @@ def create_app(registry: Registry, api_key: str | None, max_pending: int,
 
     @app.exception_handler(RequestValidationError)
     async def invalid_request(request: Request, exc: RequestValidationError) -> JSONResponse:
-        first, *rest = exc.errors()
-        param = ".".join(str(part) for part in first["loc"][1:]) or None
-        message = first["msg"] + (f" (and {len(rest)} more)" if rest else "")
-        return ApiError(422, "invalid_input", message, param).response()
+        return invalid(exc).response()
 
     @app.post("/v1/systemone", response_model=SystemOneResponse, response_model_exclude_none=True,
-              dependencies=[Depends(authorize)])
-    async def system_one(request: SystemOneRequest) -> SystemOneResponse:
+              dependencies=[Depends(authorize)], openapi_extra={"requestBody": {"content": {
+                  "application/json": {"schema": SystemOneRequest.model_json_schema()},
+                  "multipart/form-data": {"schema": {"type": "object", "properties": {
+                      "request": {"type": "string", "description": "the JSON body"},
+                      "<part>": {"type": "string", "format": "binary", "description": "an asset's bytes"}}}}}}})
+    async def system_one(http: Request) -> SystemOneResponse:
+        """A decision: JSON, or multipart with the images its text names; long context on request."""
+        request = await read_decision(http)
         name, engine = resolve(request.model)
         try:
             check_askable(request.questions, engine.max_options)
+            check_locatable(request.questions, request.state, engine.locates)
         except InvalidOptions as exc:
             raise ApiError(422, "invalid_options", str(exc), f"questions.{exc.question_id}") from exc
+        except UnsupportedModality as exc:
+            raise ApiError(422, "unsupported_modality", f"{name}: {exc}", "questions") from exc
         try:
             check_readable(request.state, engine.reads_images)
         except UnsupportedModality as exc:
             raise ApiError(422, "unsupported_modality", f"{name}: {exc}", "state") from exc
         with admission.slot() as elapsed, engine_errors():
-            response = await run_in_threadpool(engine.evaluate, request)
+            if asked_for_long_context(http):
+                with extended_context():
+                    response = await run_in_threadpool(engine.evaluate, request)
+            else:
+                response = await run_in_threadpool(engine.evaluate, request)
         usage.record(name, 1, response.usage.input_tokens)
         log.info("systemone model=%s questions=%d input_tokens=%d ms=%.0f",
                  name, len(request.questions), response.usage.input_tokens, elapsed() * 1000)

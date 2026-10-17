@@ -87,7 +87,10 @@ against the 4B's 0.4 s. A yes/no about a full-size photo takes 0.9 s on the
 4B. Fine-tuning the 4B on 84 insect photos lifts a held-out half from 0.886
 to 0.924, at the cost of calibration until a temperature is fitted. Every number,
 with intervals and the paired comparison, is in
-[Measurements](measurements.md#glances-fresh-photo-sets).
+[Measurements](measurements.md#glances-fresh-photo-sets). A box question, the
+one answer that is generated, lands on a colored square with a mean overlap of
+0.91 across four image shapes on the 4B
+([measured](measurements.md#locating-things-in-an-image)).
 
 ## Where Jev leads
 

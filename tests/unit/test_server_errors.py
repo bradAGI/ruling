@@ -1,5 +1,6 @@
 """Errors leave the server in the hosted API's shape, and a full queue turns requests away with a wait."""
 
+import json
 import threading
 
 import anyio
@@ -11,7 +12,7 @@ from fastapi.testclient import TestClient
 from ruling.calibration import Calibration
 from ruling.engine import InputTooLong, RawScore, Scored, answer
 from ruling.hosted import HostUnavailable
-from ruling.questions import SystemOneResponse, Usage
+from ruling.questions import SystemOneResponse, Usage, state_images
 from ruling import registry as registry_module
 from ruling.registry import Registry
 from ruling.server import Admission, create_app
@@ -24,6 +25,7 @@ class FakeEngine:
     prior_debias = False
     max_options = 255
     reads_images = False
+    locates = False
     rotations = 1
     max_input_tokens = max_branch_tokens = 1000
     revision = adapter = None
@@ -232,3 +234,87 @@ def test_retraining_history_covers_only_retrain_adapters_and_needs_the_key(tmp_p
         listed = client.get("/v1/retrain", headers={"authorization": "Bearer k"}).json()
     assert refused.status_code == 401
     assert listed == {"models": [{"name": "tuned", "current": "v1", "versions": [{"version": "v1", "promoted": True}]}]}
+
+
+class SightedEngine(FakeEngine):
+    """Reads images and remembers the last request, so a test can see what the server handed it."""
+
+    reads_images = True
+
+    def evaluate(self, request):
+        self.seen = request
+        return super().evaluate(request)
+
+
+def png_bytes() -> bytes:
+    from .test_images import png
+    return png(2, 2)
+
+
+def test_assets_arrive_as_multipart_parts_or_inline_and_reach_the_engine_as_images():
+    import base64
+
+    sighted = SightedEngine("vision")
+    body = {"state": "Inspect <product> against <listing>", "model": "vision",
+            "questions": {"same": {"type": "noul", "instructions": "Is <product> the item in <listing>?"}},
+            "assets": {"<product>": {"type": "image", "part": "asset-0"}, "<listing>": {"type": "image", "part": "asset-1"}}}
+    with TestClient(app_with({"vision": sighted}, "vision")) as client:
+        multipart = client.post("/v1/systemone", data={"request": json.dumps(body)},
+                                files=[("asset-0", ("asset-0", png_bytes(), "image/png")),
+                                       ("asset-1", ("asset-1", png_bytes(), "image/png"))])
+        assert multipart.status_code == 200, multipart.text
+        assert sighted.seen.questions["same"].instructions == "Is <image 1> the item in <image 2>?"
+        assert sighted.seen.state["text"] == "Inspect <image 1> against <image 2>"
+        assert [i.media_type for i in state_images(sighted.seen.state)] == ["image/png", "image/png"]
+        inline = client.post("/v1/systemone", json={**body, "assets": {
+            "<product>": {"type": "image", "data_base64": base64.b64encode(png_bytes()).decode()},
+            "<listing>": {"type": "image", "data_base64": base64.b64encode(png_bytes()).decode()}}})
+        assert inline.status_code == 200
+        missing = client.post("/v1/systemone", data={"request": json.dumps(body)},
+                              files=[("asset-0", ("asset-0", png_bytes(), "image/png"))])
+        no_request = client.post("/v1/systemone", files=[("asset-0", ("asset-0", png_bytes(), "image/png"))])
+        bad_json = client.post("/v1/systemone", data={"request": "{not json"})
+    assert missing.status_code == 422 and missing.json()["error"]["param"] == "assets"
+    assert "asset-1" in missing.json()["error"]["message"]
+    assert no_request.status_code == 422 and no_request.json()["error"]["param"] == "request"
+    assert bad_json.status_code == 422 and "JSON" in bad_json.json()["error"]["message"]
+
+
+def test_a_malformed_json_body_still_names_the_field():
+    with TestClient(app_with({"m": FakeEngine("m")}, "m")) as client:
+        response = client.post("/v1/systemone", json={**PAYLOAD, "questions": {"q": {"type": "noul", "instruction": "x"}}})
+    assert response.status_code == 422
+    assert response.json()["error"]["code"] == "invalid_input" and response.json()["error"]["param"].startswith("questions.q")
+
+
+def test_a_box_question_is_refused_by_a_model_that_does_not_locate_and_listed_where_one_does():
+    locating = SightedEngine("vision")
+    locating.locates = True
+    request = {"state": {"photo": PHOTO}, "questions": {"where": {"type": "box", "instructions": "the stamp"}}}
+    with TestClient(app_with({"m": FakeEngine("m"), "vision": locating}, "m")) as client:
+        refused = client.post("/v1/systemone", json=request)
+        no_image = client.post("/v1/systemone", json={**request, "model": "vision", "state": "no picture"})
+        listed = {m["name"]: m["question_types"] for m in client.get("/v1/models").json()["models"]}
+    assert refused.status_code == 422 and refused.json()["error"]["code"] == "unsupported_modality"
+    assert refused.json()["error"]["param"] == "questions"
+    assert no_image.status_code == 422 and no_image.json()["error"]["code"] == "invalid_options"
+    assert listed == {"m": ["choice", "score", "noul"], "vision": ["choice", "score", "noul", "box"]}
+
+
+def test_the_long_context_header_reaches_the_engine_as_the_extended_limits():
+    from ruling.engine import long_context
+
+    class Watching(FakeEngine):
+        def evaluate(self, request):
+            self.extended = long_context.get()
+            return super().evaluate(request)
+
+    watching = Watching("m")
+    with TestClient(app_with({"m": watching}, "m")) as client:
+        client.post("/v1/systemone", json=PAYLOAD)
+        plain = watching.extended
+        client.post("/v1/systemone", json=PAYLOAD, headers={"TypeSafe-Danger-Zone-Long-Context": "true"})
+        asked = watching.extended
+        client.post("/v1/systemone", json=PAYLOAD)
+        after = watching.extended
+    assert (plain, asked, after) == (False, True, False)

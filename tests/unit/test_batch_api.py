@@ -37,6 +37,7 @@ class ScoringEngine:
     prior_debias = False
     max_options = 255
     reads_images = False
+    locates = False
     rotations = 1
     max_input_tokens = max_branch_tokens = 1000
     revision = adapter = None
@@ -219,7 +220,7 @@ def test_usage_counts_decisions_and_batch_rows_per_hour_and_model():
     assert bad.status_code == 422 and bad.json()["error"]["param"] == "starting_on"
 
 
-# ---- gzip ------------------------------------------------------------------
+# ---- compressed bodies -------------------------------------------------------
 
 def test_a_gzipped_body_is_read_as_plain_json_and_a_broken_one_is_refused():
     decision = {k: ROW[k] for k in ("state", "questions")}
@@ -232,3 +233,31 @@ def test_a_gzipped_body_is_read_as_plain_json_and_a_broken_one_is_refused():
     assert batch.status_code == 200 and batch.json()["answers"][0]["id"] == "r1"
     assert broken.status_code == 422
     assert broken.json()["error"]["code"] == "invalid_input" and "gzip" in broken.json()["error"]["message"]
+
+
+def test_a_zstd_body_is_read_as_the_hosted_sdk_sends_it_and_other_encodings_are_415():
+    """TypeSafe's SDKs compress every body over 1 KiB with zstd on their own; a server that only inflated
+    gzip would refuse their ordinary requests."""
+    from backports.zstd import compress
+
+    decision = {k: ROW[k] for k in ("state", "questions")}
+    with TestClient(app_with()) as client:
+        packed = client.post("/v1/systemone", content=compress(json.dumps(decision).encode()),
+                             headers={"content-encoding": "zstd", "content-type": "application/json"})
+        broken = client.post("/v1/systemone", content=b"not zstd", headers={"content-encoding": "zstd"})
+        unknown = client.post("/v1/systemone", content=b"x", headers={"content-encoding": "br"})
+    assert packed.status_code == 200 and packed.json()["answers"]["refund"]["type"] == "noul"
+    assert broken.status_code == 422 and "zstd" in broken.json()["error"]["message"]
+    assert unknown.status_code == 415 and unknown.json()["error"]["code"] == "unsupported_encoding"
+
+
+def test_a_body_over_the_hosted_limit_is_413_whether_declared_or_inflated():
+    from ruling.server import MAX_BODY_BYTES
+
+    bomb = gzip.compress(b"0" * (MAX_BODY_BYTES + 1))
+    with TestClient(app_with()) as client:
+        declared = client.post("/v1/systemone", content=b"{}",
+                               headers={"content-type": "application/json", "content-length": str(MAX_BODY_BYTES + 1)})
+        inflated = client.post("/v1/systemone", content=bomb, headers={"content-encoding": "gzip"})
+    assert declared.status_code == 413 and declared.json()["error"]["code"] == "body_too_large"
+    assert inflated.status_code == 413 and "inflates" in inflated.json()["error"]["message"]

@@ -125,13 +125,13 @@ def build_engine(settings: Settings):
         from ruling.vision import VisionEngine
         vision = VisionEngine(settings.model, Calibration() if settings.adapter_path else calibration,
                               settings.max_input_tokens, settings.rotations, settings.prior_debias,
-                              settings.max_image_tokens, settings.max_branch_tokens)
+                              settings.max_image_tokens, settings.max_branch_tokens, settings.long_context_tokens)
         # The adapter goes onto the loaded language half, as for any variant sharing a base.
         return vision.variant(settings.adapter_path, calibration) if settings.adapter_path else vision
     if is_checkpoint(settings.model):
         return DecisionEngine(Path(settings.model), calibration, settings.max_input_tokens)
     return Engine(settings.model, calibration, settings.max_input_tokens, settings.rotations, settings.prior_debias,
-                  settings.adapter_path, settings.max_branch_tokens)
+                  settings.adapter_path, settings.max_branch_tokens, settings.long_context_tokens)
 
 
 class Registry:
@@ -174,8 +174,10 @@ class Registry:
             release_date=model_released(engine.model_id),
             revision=engine.revision, adapter=engine.adapter, calibration=dict(engine.calibration.temperatures),
             max_input_tokens=engine.max_input_tokens, max_branch_tokens=engine.max_branch_tokens,
+            long_context_tokens=getattr(engine, "long_context_tokens", None),
             max_options=engine.max_options, rotations=engine.rotations, prior_debias=engine.prior_debias,
             modalities=["text", "image"] if engine.reads_images else ["text"],
+            question_types=["choice", "score", "noul", "box"] if engine.locates else ["choice", "score", "noul"],
         ) for name, engine in self.engines.items()]
 
 

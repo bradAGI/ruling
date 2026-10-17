@@ -23,11 +23,11 @@ import httpx
 import numpy as np
 
 from ruling.calibration import Calibration, Provenance
-from ruling.engine import InputTooLong, RawScore, Scored, TwoStageChoice, answer
+from ruling.engine import InputTooLong, RawScore, Scored, TwoStageChoice, answer, long_context
 from ruling.prompt import SYSTEM_PROMPT, hosted_user_message, render_question
 from ruling.evals import answer_distribution
-from ruling.questions import (MAX_CHOICE_OPTIONS, MAX_QUESTIONS, Choice, InvalidOptions, Noul, Score, State, SystemOneRequest,
-                              SystemOneResponse, Usage, option_keys)
+from ruling.questions import (MAX_CHOICE_OPTIONS, MAX_QUESTIONS, Box, BoxAnswer, Choice, InvalidOptions, Noul, Question,
+                              Score, State, SystemOneRequest, SystemOneResponse, Usage, option_keys, state_images)
 
 OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 OPENROUTER_PREFIX = "openrouter:"
@@ -146,6 +146,7 @@ class HostedEngine(TwoStageChoice):
         self.max_options = MAX_CHOICE_OPTIONS
         # Images go to the host as content parts; a host whose model reads only text refuses them itself.
         self.reads_images = True
+        self.locates = False
         self.concurrency = concurrency
         # A hosted model's context is the host's business; ruling does not re-impose one.
         self.max_input_tokens = 1_000_000
@@ -280,6 +281,8 @@ class TypeSafeEngine:
     max_options = MAX_CHOICE_OPTIONS
     # The state goes to the service unchanged, images included; the service decides what it reads.
     reads_images = True
+    # Box questions go through too; the service answers them on the models that locate.
+    locates = True
     prefix = TYPESAFE_PREFIX
     rotations = 1
     """The host orders options as it sees fit; ruling does not re-ask it."""
@@ -311,13 +314,22 @@ class TypeSafeEngine:
                 raise InvalidOptions(qid, f"a choice needs 2 to {self.max_options} options on {self.model_id}, "
                                           f"got {len(option_keys(question))}")
 
-    def score(self, state: State, questions: dict[str, Choice | Score | Noul]) -> Scored:
-        self._check_width(questions)
+    def _headers(self, state: State, questions: dict[str, Question]) -> dict[str, str]:
+        """The service's opt-in headers for what the request uses: images, boxes, and long context."""
+        headers = {}
+        if state_images(state) or any(isinstance(q, Box) for q in questions.values()):
+            headers[IMAGES_HEADER] = "true"
+        if long_context.get():
+            headers[LONG_CONTEXT_HEADER] = "true"
+        return headers
+
+    def _post(self, state: State, questions: dict[str, Question]) -> dict:
+        """The service's answers to the questions, in its own shape."""
         body = {"state": state, "questions": {qid: q.model_dump(exclude_none=True) for qid, q in questions.items()}}
         if self.remote:
             body["model"] = self.remote
         try:
-            response = self._client.post("/v1/systemone", json=body)
+            response = self._client.post("/v1/systemone", json=body, headers=self._headers(state, questions))
         except httpx.TransportError as exc:
             raise HostUnavailable(f"{self.model_id} is unreachable: {exc}") from exc
         if response.status_code == 413 or _is_context_rejection(response):
@@ -327,7 +339,14 @@ class TypeSafeEngine:
                                f"{response.text[:300]}", question_id=_question_at_fault(response))
         if response.status_code != 200:
             raise self.refusal(response)
-        data = response.json()
+        return response.json()
+
+    def score(self, state: State, questions: dict[str, Choice | Score | Noul]) -> Scored:
+        self._check_width(questions)
+        data = self._post(state, questions)
+        return self._scored(questions, data)
+
+    def _scored(self, questions: dict[str, Choice | Score | Noul], data: dict) -> Scored:
         raw = {}
         for qid, question in questions.items():
             keys = option_keys(question)
@@ -340,13 +359,26 @@ class TypeSafeEngine:
         return Scored(raw=raw, input_tokens=int((data.get("usage") or {}).get("input_tokens") or 0))
 
     def evaluate(self, request: SystemOneRequest) -> SystemOneResponse:
-        scored = self.score(request.state, request.questions)
-        answers = {qid: answer(request.questions[qid], scored.raw[qid], self.calibration) for qid in request.questions}
-        return SystemOneResponse(model=self.model_id, answers=answers, usage=Usage(input_tokens=scored.input_tokens))
+        """One request to the service for everything asked; its boxes come back as they are, and its
+        distributions through the calibration as any engine's do."""
+        scorable = {qid: q for qid, q in request.questions.items() if not isinstance(q, Box)}
+        self._check_width(scorable)
+        data = self._post(request.state, request.questions)
+        scored = self._scored(scorable, data)
+        answers = {qid: BoxAnswer.model_validate(data["answers"][qid]) if isinstance(q, Box)
+                   else answer(q, scored.raw[qid], self.calibration) for qid, q in request.questions.items()}
+        usage = data.get("usage") or {}
+        return SystemOneResponse(model=self.model_id, answers=answers,
+                                 usage=Usage(input_tokens=scored.input_tokens,
+                                             output_tokens=int(usage.get("output_tokens") or 0)))
 
     def answer(self, question, raw: RawScore):
         return answer(question, raw, self.calibration)
 
+
+IMAGES_HEADER = "TypeSafe-Danger-Zone-Images"
+LONG_CONTEXT_HEADER = "TypeSafe-Danger-Zone-Long-Context"
+"""The hosted API's opt-in headers; ruling honors the second and accepts the first on its own routes."""
 
 VLLM_PREFIX = "vllm:"
 VLLM_PASS_OPTIONS = 26
@@ -371,6 +403,7 @@ class VllmEngine(TwoStageChoice, TypeSafeEngine):
     pass_options = VLLM_PASS_OPTIONS
     # Whether vLLM's decision endpoint reads images is unverified; refuse rather than send what it may drop.
     reads_images = False
+    locates = False
     prefix = VLLM_PREFIX
 
     def score(self, state: State, questions: dict[str, Choice | Score | Noul]) -> Scored:

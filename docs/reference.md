@@ -34,6 +34,7 @@ Limits and memory:
 |---|---|---|
 | `RULING_MAX_INPUT_TOKENS` | `65536` | Whole-request budget for a local MLX model: state plus every question. Above this the request is rejected with 422 `context_too_long`. Remote models (`openai:`, `vllm:`, `typesafe:`) are held to their host's own limit instead |
 | `RULING_MAX_BRANCH_TOKENS` | `32768` | Per-branch budget for a local MLX model: state plus one question. A single oversized question is rejected even when the request fits |
+| `RULING_LONG_CONTEXT_TOKENS` | `262144` | Both budgets for a request sent with `TypeSafe-Danger-Zone-Long-Context: true`, the hosted API's opt-in header. Slower, and a 4B model's reading degrades well before it; the request's memory grows with it, so keep `RULING_MEMORY_FRACTION` in mind |
 | `RULING_MAX_IMAGE_TOKENS` | `1024` | Tokens one image may become on a `vision:` model; a larger image is scaled down to fit. A 12-megapixel photo is about 15,000 tokens uncapped |
 | `RULING_MEMORY_FRACTION`, `RULING_CACHE_LIMIT_GB` | `0.5`, `4` | MLX's ceiling as a share of physical memory, and how much freed buffer memory it may keep. A job that cannot fit raises instead of swapping. Ignored where the backend reports no memory size (Linux CPU) |
 
@@ -255,8 +256,9 @@ and each of these flags overrides the matching setting for that one run:
 `ruling ask STATE` answers once, without a server, and prints the response as
 JSON. `STATE` is the state text, or `@path` to read it from a file; text that
 parses as JSON is sent as JSON. Questions come from `--choice ID=Q|a,b,c`,
-`--score ID=Q|lo,mid,hi` and `--noul ID=STATEMENT`, each repeatable, at least
-one required:
+`--score ID=Q|lo,mid,hi`, `--noul ID=STATEMENT` and `--box ID=WHAT` (on a
+`vision:` model, with an image in the state), each repeatable, at least one
+required:
 
 ```bash
 uv run ruling ask "Since this morning every request with our API key returns 401." \
@@ -458,8 +460,10 @@ train-encoder --help`. What the encoder is and how it measured is in
     "<id>": {"type": "choice", "instructions": "...", "criteria": {"<key>": "description, JSON, or null"}},
     "<id>": {"type": "score",  "instructions": "...", "criteria": ["lowest level", "...", "highest level"]},
     "<id>": {"type": "noul",   "instructions": "a statement to judge"},
-    "<id>": {"type": "noul",   "criteria": {"true": "what a yes looks like", "false": "what a no looks like"}}
-  }
+    "<id>": {"type": "noul",   "criteria": {"true": "what a yes looks like", "false": "what a no looks like"}},
+    "<id>": {"type": "box",    "instructions": "what to find, and in which image as <image N>"}
+  },
+  "assets": {"<name>": {"type": "image", "data_base64": "..."}}
 }
 ```
 
@@ -475,7 +479,45 @@ structure.
 most 8 per decision and 5 MB each. The model sees the state with each image
 replaced by `<image 1>`, `<image 2>`, … in document order, and the images
 themselves under those names, so a question can say "the receipt in
-`<image 1>`". Three ways to serve them:
+`<image 1>`".
+
+**Assets** are the hosted API's other way to send an image, and what its SDKs
+send: an `assets` map at the top of the request, each image under a name the
+text uses wherever it likes, in the state, in instructions, or in an option's
+or level's description. The bytes go as `data_base64`, as the state's
+`media_type` + `data` shape, or as a multipart part: send the JSON as a
+`multipart/form-data` part named `request` and each asset's bytes as a part
+named by its `part` field, so nothing is base64-encoded.
+
+```json
+{"state": "The customer returned <product>; the listing showed <listing>.",
+ "questions": {"same": {"type": "noul", "instructions": "<product> is the item in <listing>."}},
+ "assets": {"<product>": {"type": "image", "part": "p"}, "<listing>": {"type": "image", "data_base64": "..."}}}
+```
+
+The server puts each asset into the state after the images already there,
+numbered in the order the text first mentions them, and rewrites every mention
+to its `<image N>` name; the model never sees the asset names. An asset the
+text never mentions, a part no asset names, or bytes that are not an image are
+422 `invalid_input` on `assets`. The hosted API wants
+`TypeSafe-Danger-Zone-Images: true` on such a request; ruling accepts the
+header and does not need it.
+
+**Box** asks where something is in an image, on a model whose
+`question_types` include `box` (a `vision:` model, or `typesafe:` where the
+service locates). The instructions say what to find and, with several images
+in the state, which one as `<image N>`; with one image, nothing more. The
+answer is always four edges, as fractions of that image from its top-left
+corner, with a `confidence`; nothing is "not found", so pair a box with a noul
+that asks whether the thing is there at all. A `vision:` model generates the
+box, the one answer that is: it is asked for the subject's bounding box the way
+its grounding training phrased it and names the edges on a 1000 × 1000 grid,
+and `confidence` is the geometric mean probability of the leading digit of each
+number it wrote. The tokens it generates are the response's `output_tokens`.
+See [Measurements](measurements.md#locating-things-in-an-image) for how
+close the boxes land.
+
+Three ways to serve images:
 
 - **Locally on a Mac:** `vision:` loads a vision-language model through
   mlx-vlm, vision tower included. The default Qwen3.5 checkpoints are such
@@ -505,12 +547,21 @@ Answers come back keyed by the same ids:
 | choice | `choice` (the argmax key), `probabilities` over keys, `confidence` |
 | score | `score` (probability-weighted level index, so `1.74` sits between levels 1 and 2), `legend` index to level text, `probabilities` over indices, `confidence` |
 | noul | `noul`, the probability the statement is true |
+| box | `box` with `top`, `bottom`, `left`, `right` as fractions of the image, `confidence` |
 
 With a ledger configured, the response also carries `id`, the decision to
 report an outcome for; without one the body is exactly the hosted API's.
 
 `usage.input_tokens` counts every token the model processed: the shared prefix
-once, plus each question suffix for each ordering. `output_tokens` is always 0.
+once, plus each question suffix for each ordering, plus each box question's
+prompt. `output_tokens` is the tokens generated for box questions, and 0
+without any.
+
+**Long context.** A request sent with `TypeSafe-Danger-Zone-Long-Context:
+true`, the hosted API's opt-in header, is read up to `RULING_LONG_CONTEXT_TOKENS`
+(262,144 by default) for the whole request and for each branch instead of the
+configured limits, on local models; a `typesafe:` engine forwards the header.
+`GET /v1/models` reports each model's `long_context_tokens`.
 
 The response's `model` is the name the request selected; the primary reports
 its engine's id, which a failover changes to say which side answered.
@@ -647,10 +698,13 @@ curves, read from `GET /v1/retrain`; see
 
 ### Compressed bodies
 
-A POST body may be sent with `Content-Encoding: gzip`; the server inflates it
-before reading it, and a body that does not inflate is 422 `invalid_input`. A
-batch of thousands of rows shrinks several times over, and the Python client
-does this on its own for any body of 64 KB or more.
+A POST body may be sent with `Content-Encoding: gzip` or `zstd`; the server
+inflates it before reading it, and a body that does not inflate is 422
+`invalid_input`. Any other encoding is 415 `unsupported_encoding`, and a body
+over 32 MiB, declared or inflated, is 413 `body_too_large`. TypeSafe's SDKs
+zstd-compress every body over 1 KiB on their own, so this is what lets them
+talk to ruling at all; a batch of thousands of rows shrinks several times
+over, and the Python client gzips any body of 64 KB or more.
 
 ### Errors
 
@@ -661,9 +715,11 @@ Errors come in the hosted API's shape, `{"error": {"code", "message",
 |---|---|---|
 | 422 | `invalid_input` | a malformed request: `param` names the field, such as a choice over 255 options, a score over 10 levels, or more than 64 questions |
 | 422 | `invalid_options` | a well-formed question the model cannot answer: a choice with one option or more than the model reads, or nothing to ask; `param` is `questions.<id>` |
-| 422 | `unsupported_modality` | the state holds images and the selected model reads only text; `param` is `state` |
+| 422 | `unsupported_modality` | the state holds images and the selected model reads only text (`param` is `state`), or a box question went to a model that does not locate (`param` is `questions`) |
 | 422 | `context_too_long` | a request over a token limit; `param` is `questions.<id>` when one question is at fault |
-| 422 | `invalid_input` | without `param`: a request the engine refuses, such as one a remote decision server rejects, or a body sent as `Content-Encoding: gzip` that does not inflate; on the outcome route, `param` is `labels` for a label that does not fit the logged question; on the batch routes, `param` is `rows` for no rows, more than 50,000, or none with labels, and `rows.<i>` for a row an evaluation cannot score |
+| 422 | `invalid_input` | without `param`: a request the engine refuses, such as one a remote decision server rejects, or a compressed body that does not inflate; `param` is `assets` for an asset the text never mentions, a part no asset names, or bytes that are not an image; on the outcome route, `param` is `labels` for a label that does not fit the logged question; on the batch routes, `param` is `rows` for no rows, more than 50,000, or none with labels, and `rows.<i>` for a row an evaluation cannot score |
+| 413 | `body_too_large` | a body over 32 MiB, as sent or once inflated |
+| 415 | `unsupported_encoding` | a `Content-Encoding` other than `gzip` or `zstd` |
 | 404 | `unknown_model` | a `model` the server does not answer for; the message lists the names it does |
 | 404 | `unknown_decision` | an outcome for an id the ledger does not hold |
 | 401 | `unauthorized` | an API key is configured and missing or wrong |
@@ -694,10 +750,13 @@ with TypeSafeClient() as client:                  # now answered locally
 ```
 
 `client.system_one`, `client.models.list()`, `response.choices`,
-`response.nouls`, `response.scores` and `response.usage` all work. This is
-covered by an integration test that installs the real
+`response.nouls`, `response.scores` and `response.usage` all work, and so do
+the client's images and `Box` questions against a `vision:` model: `Image`
+objects in the state, in instructions or in criteria, named assets, and
+`attach_assets`, which the client sends as a zstd-compressed multipart body.
+This is covered by integration tests that install the real
 [`typesafe-sdk`](https://github.com/typesafe-ai/typesafe-sdk-python) package
-and runs it against a live ruling server, so the compatibility claim fails
+and run it against live ruling servers, so the compatibility claim fails
 loudly if either side drifts.
 
 ## Clients
@@ -772,11 +831,19 @@ one from a file (`.png`, `.jpg`, `.jpeg` or `.webp`; anything else raises
 server enforces:
 
 ```python
-from ruling import Image
+from ruling import Box, Image
 
 response = client.system_one(
     state={"receipt": Image.from_path("receipt.jpg"), "claimed": 42.10},
-    questions={"matches": Noul(instructions="The total in <image 1> is the claimed amount.")},
+    questions={"matches": Noul(instructions="The total in <image 1> is the claimed amount."),
+               "where": Box(instructions="the total line on <image 1>")},
+)
+response.answers["where"].box.top          # fractions of the image, with .bottom, .left, .right
+
+response = client.system_one(
+    state="The customer returned <item>.",
+    questions={"damaged": Noul(instructions="<item> is damaged.")},
+    assets={"<item>": Image.from_path("returned.jpg")},   # named wherever the text says <item>
 )
 ```
 
@@ -793,8 +860,12 @@ backoff_initial=0.5, backoff_max=5.0)` is the default, waiting the server's
 TypeScript and JavaScript, zero dependencies, in [`sdks/typescript`](../sdks/typescript):
 
 ```js
-import { RulingClient, choice, noul, score } from "ruling";
+import { RulingClient, box, choice, image, noul, score } from "ruling";
 const { answers } = await new RulingClient().systemOne({ state, questions: { team: choice("Which team?", { billing: null, technical: null }) } });
+const located = await new RulingClient().systemOne({
+  state: "The customer returned <item>.", assets: { "<item>": image(bytes, "image/jpeg") },
+  questions: { where: box("the damage on <item>") },
+});
 ```
 
 ## Datasets and reports

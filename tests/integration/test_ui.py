@@ -173,3 +173,19 @@ def test_the_ask_tab_sends_a_picked_picture_with_the_question(page: Page, served
     assert image["type"] == "image" and image["media_type"] == "image/png" and answered.value.status == 200
     page.select_option("#model", "text")
     assert page.is_disabled("#ask-images")
+
+
+def test_a_box_answer_is_drawn_over_the_image_where_the_server_put_it(page: Page, served_vision):
+    """The image example on a model that locates asks where the total is; the overlay's edges are the
+    answer's, as fractions of the receipt."""
+    page.goto(served_vision)
+    page.wait_for_function("document.querySelectorAll('#model option').length > 0")
+    page.click("#image-example")
+    assert "where_total" in json.loads(page.input_value("#questions"))
+    with page.expect_response("**/v1/systemone") as answered:
+        page.click("#run")
+    box = answered.value.json()["answers"]["where_total"]["box"]
+    overlay = page.wait_for_selector(".boxed i")
+    style = overlay.get_attribute("style")
+    assert f"top:{box['top'] * 100:.2f}%" in style and f"left:{box['left'] * 100:.2f}%" in style
+    assert f"width:{(box['right'] - box['left']) * 100:.2f}%" in style

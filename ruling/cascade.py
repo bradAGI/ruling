@@ -46,6 +46,7 @@ class CascadeEngine:
         self.max_branch_tokens = min(first.max_branch_tokens, second.max_branch_tokens)
         self.max_options = min(first.max_options, second.max_options)
         self.reads_images = first.reads_images and second.reads_images
+        self.locates = False
         self.calibration = Calibration()
 
     @property

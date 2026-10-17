@@ -82,8 +82,10 @@ def test_models_and_playground(app, engine):
                                 "id": engine.model_id, "base": engine.model_id, "revision": engine.revision,
                                 "adapter": None, "calibration": {},
                                 "max_input_tokens": 8192, "max_branch_tokens": engine.max_branch_tokens,
+                                "long_context_tokens": engine.long_context_tokens,
                                 "max_options": engine.max_options, "rotations": engine.rotations,
-                                "prior_debias": engine.prior_debias, "modalities": ["text"]}]}
+                                "prior_debias": engine.prior_debias, "modalities": ["text"],
+                                "question_types": ["choice", "score", "noul"]}]}
     assert page.status_code == 200 and "/v1/systemone" in page.text
     # The page lists the registry and sends the picked name; a stale page would still post with no model.
     assert "/v1/models" in page.text and 'id="model"' in page.text and "model: model.value" in page.text

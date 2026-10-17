@@ -18,6 +18,7 @@ from ruling.ask import AskResponse
 from ruling.questions import (
     IMAGE_SUFFIXES,
     Answer,
+    Box,
     Choice,
     ModelInfo,
     ModelList,
@@ -106,13 +107,16 @@ class RulingClient:
         self._http = httpx.Client(base_url=self.base_url, headers=headers, timeout=timeout, transport=transport)
 
     def system_one(
-        self, state: State, questions: dict[str, Choice | Score | Noul], model: str | None = None,
-        exclude_from_training: bool = False,
+        self, state: State, questions: dict[str, Choice | Score | Noul | Box], model: str | None = None,
+        exclude_from_training: bool = False, assets: dict[str, dict] | None = None,
     ) -> SystemOneResponse:
-        request = SystemOneRequest(model=model, state=state, questions=questions,
+        """A decision. `assets` names images the text mentions, `{"<photo>": Image.from_path(...)}`, which the
+        server puts in the state as `<image N>`; a `Box` question asks where something is in one of them."""
+        request = SystemOneRequest(model=model, state=state, questions=questions, assets=assets,
                                    exclude_from_training=exclude_from_training)
-        # The flag goes only when set, so every other body is exactly System One's.
-        body = request.model_dump(mode="json", exclude=None if exclude_from_training else {"exclude_from_training"})
+        # Unset fields stay off the wire, so a body without the flag or assets is exactly System One's.
+        body = request.model_dump(mode="json", exclude_none=True,
+                                  exclude=None if exclude_from_training else {"exclude_from_training"})
         return SystemOneResponse.model_validate(self._send("POST", "/v1/systemone", body).json())
 
     def ask(self, text: str, model: str | None = None, images: list[dict] | None = None) -> AskResponse:

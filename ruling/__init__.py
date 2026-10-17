@@ -1,6 +1,8 @@
 """ruling: typed, probabilistic decisions from a local open-weight model."""
 
 from ruling.questions import (
+    Box,
+    BoxAnswer,
     Choice,
     ChoiceAnswer,
     Noul,
@@ -13,6 +15,8 @@ from ruling.questions import (
 from ruling.sdk import Image, RetryPolicy, RulingClient, RulingError
 
 __all__ = [
+    "Box",
+    "BoxAnswer",
     "Choice",
     "ChoiceAnswer",
     "Image",

@@ -24,6 +24,7 @@ class FakeEngine:
     prior_debias = False
     max_options = 255
     reads_images = False
+    locates = False
 
     def __init__(self, model_id, top, failing=None):
         self.model_id, self.top, self.failing = model_id, top, failing

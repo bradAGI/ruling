@@ -200,6 +200,7 @@ class DecisionEngine:
     prior_debias = False
     max_options = MAX_CHOICE_OPTIONS
     reads_images = False
+    locates = False
 
     def __init__(self, checkpoint: Path, calibration: Calibration, max_input_tokens: int):
         meta = json.loads((checkpoint / CHECKPOINT_FILE).read_text())

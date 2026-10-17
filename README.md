@@ -11,10 +11,11 @@
 ruling turns any open chat model into a decision engine like TypeSafe's
 [Jev](https://typesafe.ai/blog/introducing-system-one-models-and-jev). You send
 a state (text, JSON or images) and typed questions; you get back a probability
-for every option you declared. Nothing is generated, so there is nothing to
-parse and the model cannot invent an answer you did not list. It runs on your
-own machine, serves TypeSafe's API so their client works against it unchanged,
-and learns from the outcomes of the decisions it serves.
+for every option you declared, or the edges of what a box question asked it to
+find in an image. Nothing else is generated, so there is nothing to parse and
+the model cannot invent an answer you did not list. It runs on your own
+machine, serves TypeSafe's API so their client works against it unchanged,
+images and all, and learns from the outcomes of the decisions it serves.
 
 On the 256 public judgments that carry Jev's own answers, a 19 GB open model
 with no training gets 231 right to Jev's 238, not a significant difference

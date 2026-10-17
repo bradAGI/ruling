@@ -12,6 +12,7 @@ class TooLongPast:
     """Answers every state no longer than `limit` characters, as an engine with a context limit does."""
     max_options = 3
     reads_images = False
+    locates = False
 
     def __init__(self, limit: int):
         self.limit = limit

@@ -106,3 +106,45 @@ def test_other_422s_from_a_host_are_refusals_not_capacity():
     engine = engine_with(lambda request: httpx.Response(422, json={"error": {"code": "invalid_input", "message": "x"}}))
     with pytest.raises(RuntimeError):
         engine.score("state", QUESTIONS)
+
+
+def test_boxes_go_to_the_service_with_its_images_header_and_come_back_as_they_are():
+    from ruling.hosted import IMAGES_HEADER, LONG_CONTEXT_HEADER
+    from ruling.questions import Box, BoxAnswer
+
+    seen = {}
+
+    def handler(request):
+        seen["headers"] = dict(request.headers)
+        seen["body"] = json.loads(request.content)
+        return httpx.Response(200, json={**PUBLISHED, "answers": {**PUBLISHED["answers"], "where": {
+            "type": "box", "box": {"top": 0.1, "bottom": 0.4, "left": 0.2, "right": 0.9}, "confidence": 0.7}},
+            "usage": {"input_tokens": 321, "output_tokens": 12}})
+
+    engine = engine_with(handler)
+    assert engine.locates
+    response = engine.evaluate(SystemOneRequest(state="A photo <image 1>",
+                                                questions={**QUESTIONS, "where": Box(instructions="the stamp")}))
+    assert seen["body"]["questions"]["where"] == {"type": "box", "instructions": "the stamp"}
+    assert seen["headers"][IMAGES_HEADER.lower()] == "true" and LONG_CONTEXT_HEADER.lower() not in seen["headers"]
+    assert response.answers["where"] == BoxAnswer(box={"top": 0.1, "bottom": 0.4, "left": 0.2, "right": 0.9}, confidence=0.7)
+    assert response.answers["refund"].noul == pytest.approx(0.9)
+    assert response.usage.output_tokens == 12
+
+
+def test_a_request_asking_for_long_context_forwards_the_services_header():
+    from ruling.engine import extended_context
+    from ruling.hosted import IMAGES_HEADER, LONG_CONTEXT_HEADER
+
+    seen = []
+
+    def handler(request):
+        seen.append(dict(request.headers))
+        return httpx.Response(200, json=PUBLISHED)
+
+    engine = engine_with(handler)
+    engine.score("plain text", QUESTIONS)
+    with extended_context():
+        engine.score("plain text", QUESTIONS)
+    assert LONG_CONTEXT_HEADER.lower() not in seen[0] and IMAGES_HEADER.lower() not in seen[0]
+    assert seen[1][LONG_CONTEXT_HEADER.lower()] == "true"

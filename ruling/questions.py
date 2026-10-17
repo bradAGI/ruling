@@ -5,9 +5,11 @@ from __future__ import annotations
 import base64
 import binascii
 import json
+import re
+from collections.abc import Iterator, Mapping
 from typing import Annotated, Any, Literal, Union
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, field_validator, model_validator
 
 State = Union[str, dict[str, Any], list[Any]]
 
@@ -27,6 +29,7 @@ MAX_QUESTIONS = 64
 MAX_IMAGES = 8
 MAX_IMAGE_BYTES = 5 * 2**20
 IMAGE_REFERENCE = "<image {}>"
+IMAGE_MENTION = re.compile(r"<image (\d+)>")
 ImageMediaType = Literal["image/png", "image/jpeg", "image/webp"]
 IMAGE_SUFFIXES = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".webp": "image/webp"}
 """The media type an image file's suffix implies, for clients reading images off disk."""
@@ -38,7 +41,7 @@ for its whole duration, so the limit bounds how long one client can keep a slot.
 # The hosted SDK sends its default model name on every request. Treating these as
 # "whichever model this server loaded" is what lets that client talk to ruling
 # unchanged; the response still reports the model that actually answered.
-DEFAULT_MODEL_ALIASES = ("jev-latest", "default")
+DEFAULT_MODEL_ALIASES = ("jev-latest", "jev-preview", "default")
 
 
 def render_text(value: Text) -> str:
@@ -103,14 +106,25 @@ class Noul(Strict):
         return self.criteria is not None and (has_text(self.criteria.true) or has_text(self.criteria.false))
 
 
-Question = Annotated[Union[Choice, Score, Noul], Field(discriminator="type")]
+class Box(Strict):
+    """Where something is in an image. The instructions say what to find and, when the state holds
+    several images, which one as `<image N>`. A box is never "not found": the answer is always four
+    edges, with a confidence to say how sure the model is, as the hosted API's box is."""
+
+    type: Literal["box"] = "box"
+    instructions: Text
+
+
+Scorable = Union[Choice, Score, Noul]
+"""The question types answered from a distribution over options; a box is generated instead."""
+Question = Annotated[Union[Choice, Score, Noul, Box], Field(discriminator="type")]
 
 
 # What a noul asks when it has no instructions and only its criteria describe the answers.
 DESCRIBED_NOUL = "Which description fits the state?"
 
 
-def question_statement(question: Question) -> str:
+def question_statement(question: Scorable) -> str:
     """The question's instructions as prompt text, or the standing question a described noul asks."""
     return render_text(question.instructions) if has_text(question.instructions) else DESCRIBED_NOUL
 
@@ -163,8 +177,94 @@ def without_images(state: State) -> State:
     return replace(state)
 
 
+def with_images(state: State, images: list[Image]) -> State:
+    """The state with `images` after everything in it, so they take the next `<image N>` numbers:
+    appended to a list, added as `images` to an object, and a text state becomes `{"text", "images"}`."""
+    blocks = [image.model_dump() for image in images]
+    if not blocks:
+        return state
+    if isinstance(state, list):
+        return [*state, *blocks]
+    if isinstance(state, dict):
+        existing = state.get("images")
+        if isinstance(existing, list):
+            return {**state, "images": [*existing, *blocks]}
+        if existing is None:
+            return {**state, "images": blocks}
+        return {"state": state, "images": blocks}
+    return {"text": state, "images": blocks}
+
+
+IMAGE_SIGNATURES: tuple[tuple[bytes, ImageMediaType], ...] = (
+    (b"\x89PNG\r\n\x1a\n", "image/png"), (b"\xff\xd8\xff", "image/jpeg"), (b"RIFF", "image/webp"))
+
+
+def sniff_media_type(data: bytes) -> ImageMediaType:
+    """What the bytes are, from their signature; a client's `format` field is not trusted over them."""
+    for signature, media_type in IMAGE_SIGNATURES:
+        if data.startswith(signature) and (media_type != "image/webp" or data[8:12] == b"WEBP"):
+            return media_type
+    raise ValueError("not a PNG, JPEG or WebP image")
+
+
+class Asset(Strict):
+    """An image sent beside the text and named in it, as the hosted API's `assets` carries one:
+    the bytes as `data_base64`, as the state's `media_type` + `data`, or in a multipart part."""
+
+    type: Literal["image"]
+    format: str | None = None
+    data_base64: str | None = None
+    data: str | None = None
+    media_type: ImageMediaType | None = None
+    part: str | None = None
+
+    @model_validator(mode="after")
+    def one_source(self) -> "Asset":
+        sources = [name for name in ("data_base64", "data", "part") if getattr(self, name) is not None]
+        if len(sources) != 1:
+            raise ValueError("an asset needs exactly one of data_base64, data, or part")
+        return self
+
+    def image(self, parts: Mapping[str, bytes]) -> Image:
+        if self.part is not None:
+            if self.part not in parts:
+                raise ValueError(f"no multipart part named {self.part!r}")
+            raw = parts[self.part]
+        else:
+            try:
+                raw = base64.b64decode(self.data_base64 or self.data, validate=True)
+            except binascii.Error as exc:
+                raise ValueError(f"image data must be base64: {exc}") from exc
+        return Image(type="image", media_type=self.media_type or sniff_media_type(raw),
+                     data=base64.b64encode(raw).decode())
+
+
+def _strings(value: Any) -> Iterator[str]:
+    """Every string in a JSON value, depth first in document order; object keys are names, not text."""
+    if isinstance(value, str):
+        yield value
+    elif isinstance(value, dict):
+        for child in value.values():
+            yield from _strings(child)
+    elif isinstance(value, list):
+        for child in value:
+            yield from _strings(child)
+
+
+def _replaced(value: Any, names: dict[str, str]) -> Any:
+    if isinstance(value, str):
+        for name in sorted(names, key=len, reverse=True):
+            value = value.replace(name, names[name])
+        return value
+    if isinstance(value, dict):
+        return {key: _replaced(child, names) for key, child in value.items()}
+    if isinstance(value, list):
+        return [_replaced(child, names) for child in value]
+    return value
+
+
 class UnsupportedModality(ValueError):
-    """A state holds images and the model that would answer reads only text."""
+    """A state holds images, or a question needs one located, and the model that would answer cannot."""
 
 
 def check_readable(state: State, reads_images: bool) -> None:
@@ -178,6 +278,32 @@ class InvalidOptions(ValueError):
     def __init__(self, question_id: str, message: str):
         super().__init__(f"questions.{question_id}: {message}")
         self.question_id = question_id
+
+
+def check_locatable(questions: dict[str, Question], state: State, locates: bool) -> None:
+    """Refuse a box question the selected model cannot answer, or one with no image to search."""
+    boxes = [qid for qid, question in questions.items() if isinstance(question, Box)]
+    if not boxes:
+        return
+    if not locates:
+        raise UnsupportedModality("this model does not locate; a box question needs a vision: model")
+    if not state_images(state):
+        raise InvalidOptions(boxes[0], "a box needs an image in the state to search")
+
+
+def target_image(question_id: str, box: Box, count: int) -> int:
+    """Which of the state's `count` images a box searches: the one its instructions name as `<image N>`,
+    or the only one; naming none of several, or several, is an error on the question."""
+    named = sorted({int(n) for n in IMAGE_MENTION.findall(render_text(box.instructions))})
+    if not named:
+        if count == 1:
+            return 1
+        raise InvalidOptions(question_id, f"the state holds {count} images; name the one to search as <image N>")
+    if len(named) > 1:
+        raise InvalidOptions(question_id, "a box searches one image; the instructions name several")
+    if named[0] > count:
+        raise InvalidOptions(question_id, f"the instructions name <image {named[0]}> but the state holds {count}")
+    return named[0]
 
 
 def check_askable(questions: dict[str, Question], max_options: int) -> None:
@@ -194,6 +320,9 @@ class SystemOneRequest(BaseModel):
     model: str | None = None
     state: State
     questions: dict[str, Question] = Field(min_length=1, max_length=MAX_QUESTIONS)
+    assets: dict[str, Asset] | None = None
+    """Images named in the state, instructions or criteria by the key they sit under here; `resolve_assets`
+    turns them into `<image N>` references and images in the state before anything reads the request."""
     # Marks traffic that must never become training data, such as benchmarks and evaluations.
     exclude_from_training: bool = False
 
@@ -207,6 +336,45 @@ class SystemOneRequest(BaseModel):
         if any(not qid for qid in self.questions):
             raise ValueError("question ids must be non-empty")
         return self
+
+
+def resolve_assets(request: SystemOneRequest, parts: Mapping[str, bytes] | None = None) -> SystemOneRequest:
+    """The request with each asset's image in the state and each mention of its name, wherever the text
+    says it, replaced by that image's `<image N>` reference. Assets are numbered after the state's own
+    images, in the order the request first mentions them; an asset nothing mentions is an error, as a
+    multipart part no asset names is."""
+    parts = parts or {}
+    assets = request.assets or {}
+    unnamed = sorted(set(parts) - {asset.part for asset in assets.values()})
+    if unnamed:
+        raise ValueError(f"multipart parts {unnamed} are named by no asset")
+    if not assets:
+        return request
+    images = {}
+    for key, asset in assets.items():
+        try:
+            images[key] = asset.image(parts)
+        except ValueError as exc:
+            raise ValueError(f"assets.{key}: {exc}") from exc
+    questions = {qid: question.model_dump(exclude_none=True) for qid, question in request.questions.items()}
+    texts = list(_strings(request.state)) + list(_strings(questions))
+    first: dict[str, tuple[int, int]] = {}
+    for position, text in enumerate(texts):
+        for key in assets:
+            at = text.find(key)
+            if at >= 0 and (key not in first or (position, at) < first[key]):
+                first[key] = (position, at)
+    unmentioned = sorted(set(assets) - set(first))
+    if unmentioned:
+        raise ValueError(f"assets {unmentioned} are mentioned nowhere in the state or questions")
+    ordered = sorted(assets, key=first.__getitem__)
+    state = with_images(request.state, [images[key] for key in ordered])
+    inline = len(state_images(request.state))
+    names = {key: IMAGE_REFERENCE.format(inline + number) for number, key in enumerate(ordered, 1)}
+    return request.model_copy(update={"state": check_images(_replaced(state, names)),
+                                      "questions": {qid: QUESTION.validate_python(_replaced(q, names))
+                                                    for qid, q in questions.items()},
+                                      "assets": None})
 
 
 def check_images(state: State) -> State:
@@ -237,12 +405,31 @@ class NoulAnswer(BaseModel):
     noul: float
 
 
-Answer = Annotated[Union[ChoiceAnswer, ScoreAnswer, NoulAnswer], Field(discriminator="type")]
+class BoxCoordinates(BaseModel):
+    """Edges as fractions of the image, from its top-left corner: `top` and `bottom` of the height,
+    `left` and `right` of the width, each from zero to one."""
+
+    top: float = Field(ge=0, le=1)
+    bottom: float = Field(ge=0, le=1)
+    left: float = Field(ge=0, le=1)
+    right: float = Field(ge=0, le=1)
+
+
+class BoxAnswer(BaseModel):
+    type: Literal["box"] = "box"
+    box: BoxCoordinates
+    confidence: float
+
+
+Answer = Annotated[Union[ChoiceAnswer, ScoreAnswer, NoulAnswer, BoxAnswer], Field(discriminator="type")]
 
 
 class Usage(BaseModel):
     input_tokens: int
     output_tokens: int = 0
+
+
+QUESTION = TypeAdapter(Question)
 
 
 class SystemOneResponse(BaseModel):
@@ -268,17 +455,21 @@ class ModelInfo(BaseModel):
     calibration: dict[str, float]
     max_input_tokens: int
     max_branch_tokens: int
+    long_context_tokens: int | None
+    """Both limits for a request sent with `TypeSafe-Danger-Zone-Long-Context: true`; None where the
+    engine has no limit of its own."""
     max_options: int
     rotations: int
     prior_debias: bool
     modalities: list[Literal["text", "image"]]
+    question_types: list[Literal["choice", "score", "noul", "box"]]
 
 
 class ModelList(BaseModel):
     models: list[ModelInfo]
 
 
-def option_keys(question: Choice | Score | Noul) -> list[str]:
+def option_keys(question: Scorable) -> list[str]:
     """The ordered answer set a question is scored over."""
     if isinstance(question, Choice):
         return list(question.criteria)

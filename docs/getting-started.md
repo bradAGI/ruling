@@ -120,6 +120,26 @@ an OpenAI-compatible server reads them too, through `openai:`; see the
 [API reference](reference.md#api). To teach a `vision:` model your own
 decisions about images, see [Fine-tune on images](fine-tuning.md#fine-tune-on-images).
 
+Images can also come as **assets**, named wherever the text mentions them, in
+the state, in a question's instructions or in an option's description, which
+is how TypeSafe's SDKs send them:
+
+```bash
+curl -s localhost:8010/v1/systemone -H 'content-type: application/json' -d '{
+  "state": "The customer returned <item>.",
+  "assets": {"<item>": {"type": "image", "data_base64": "'"$(base64 < returned.jpg)"'"}},
+  "questions": {"damaged": {"type": "noul", "instructions": "<item> is damaged."},
+                "where":   {"type": "box",  "instructions": "the damage on <item>"}}}'
+```
+
+A **box** question asks where something is in an image, and answers with the
+edges of what it found as fractions of the image, plus a confidence; the
+playground draws it over the picture. The image example asks where the total
+is on the receipt. A box is always four edges, never "not found", so ask a
+noul beside it when the thing may be absent. On the 4B, a box lands on a
+colored square with a mean overlap of 0.91 across image shapes; see
+[Measurements](measurements.md#locating-things-in-an-image).
+
 ## Call it from code
 
 - **Python**, in this package: `from ruling import RulingClient`. Decisions,

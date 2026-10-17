@@ -1,6 +1,6 @@
 {
   "name": "ruling",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Client for a ruling server: typed, probabilistic decisions from a local model.",
   "type": "module",
   "main": "index.js",

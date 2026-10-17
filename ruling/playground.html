@@ -52,6 +52,10 @@
   .facts .bar { height: 7px; }
   .facts .reading { color: var(--muted); font-weight: normal; margin-left: 6px; }
   details summary { cursor: pointer; color: var(--muted); font-size: 12px; }
+  /* A box answer drawn over the image it searched, at the image's own proportions. */
+  .boxed { position: relative; display: inline-block; max-width: 100%; margin-top: 6px; }
+  .boxed img { display: block; max-width: 100%; max-height: 360px; border: 1px solid var(--line); border-radius: 4px; }
+  .boxed i { position: absolute; border: 2px solid var(--accent); box-shadow: 0 0 0 1px #fff8; box-sizing: border-box; }
   pre { white-space: pre-wrap; font: inherit; font-size: 12px; margin: 6px 0; }
   @media (max-width: 700px) { main { grid-template-columns: 1fr; } section { grid-template-columns: 1fr; } }
 </style>
@@ -115,6 +119,7 @@ const askPicker = document.getElementById("ask-images");
 const thumbs = document.getElementById("thumbs");
 const stateBox = document.getElementById("state");
 const modalities = {};
+const questionTypes = {};
 let picked = [];
 const keyBox = document.getElementById("key");
 // Kept for this tab only, and shared with the history page, which reads it from the same place.
@@ -141,6 +146,7 @@ function showModels(data) {
   out.innerHTML = "";
   for (const m of data.models) {
     modalities[m.name] = m.modalities;
+    questionTypes[m.name] = m.question_types;
     const option = document.createElement("option");
     option.value = m.name;
     option.textContent = m.adapter ? `${m.name} (${m.base} + adapter ${m.adapter})` : m.name === m.base ? m.name : `${m.name} (${m.base})`;
@@ -152,13 +158,12 @@ function showModels(data) {
 }
 listModels();
 function parseState(text) { try { return JSON.parse(text); } catch { return text; } }
-function countImages(value) {
-  if (Array.isArray(value)) return value.reduce((n, v) => n + countImages(v), 0);
-  if (value && typeof value === "object") {
-    return value.type === "image" ? 1 : Object.values(value).reduce((n, v) => n + countImages(v), 0);
-  }
-  return 0;
+function imagesIn(value) {
+  if (Array.isArray(value)) return value.flatMap(imagesIn);
+  if (value && typeof value === "object") return value.type === "image" ? [value] : Object.values(value).flatMap(imagesIn);
+  return [];
 }
+function countImages(value) { return imagesIn(value).length; }
 // Picked images go after everything already in the state, so they take the next numbers.
 function withImages(state) {
   if (!picked.length) return state;
@@ -207,6 +212,7 @@ const IMAGE_QUESTIONS = {
   "total": {"type": "score", "instructions": "How large is the total on <image 1>?",
             "criteria": ["Under $10", "$10 to $100", "Over $100"]}
 };
+const BOX_QUESTION = {"where_total": {"type": "box", "instructions": "the TOTAL line on <image 1>"}};
 function drawReceipt() {
   const canvas = document.createElement("canvas");
   canvas.width = 360; canvas.height = 480;
@@ -223,8 +229,9 @@ function drawReceipt() {
   return { media_type: "image/png", data: canvas.toDataURL("image/png").split(",", 2)[1] };
 }
 function loadImageExample() {
+  const locates = (questionTypes[model.value] || []).includes("box");
   stateBox.value = JSON.stringify(IMAGE_STATE, null, 2);
-  document.getElementById("questions").value = JSON.stringify(IMAGE_QUESTIONS, null, 2);
+  document.getElementById("questions").value = JSON.stringify(locates ? { ...IMAGE_QUESTIONS, ...BOX_QUESTION } : IMAGE_QUESTIONS, null, 2);
   picked = [drawReceipt()];
   showThumbs();
 }
@@ -236,6 +243,17 @@ picker.onchange = async () => {
   picker.value = "";
   showThumbs();
 };
+// A box over the image its question named (the only one when it names none), edges as the server gave them.
+function boxed(a, images, instructions) {
+  const named = /<image (\d+)>/.exec(typeof instructions === "string" ? instructions : JSON.stringify(instructions));
+  const image = images[(named ? Number(named[1]) : 1) - 1];
+  const { top, bottom, left, right } = a.box;
+  const edges = `top ${top.toFixed(3)} · bottom ${bottom.toFixed(3)} · left ${left.toFixed(3)} · right ${right.toFixed(3)} · confidence ${a.confidence.toFixed(2)}`;
+  if (!image) return `<div class="meta">${edges}</div>`;
+  return `<div class="boxed"><img alt="" src="data:${image.media_type};base64,${image.data}">` +
+         `<i style="top:${(top * 100).toFixed(2)}%;left:${(left * 100).toFixed(2)}%;width:${((right - left) * 100).toFixed(2)}%;height:${((bottom - top) * 100).toFixed(2)}%"></i></div>` +
+         `<div class="meta">${edges}</div>`;
+}
 function bar(label, p) {
   return `<div class="row"><span>${label}</span><div class="bar"><i style="width:${(p * 100).toFixed(1)}%"></i></div><span>${p.toFixed(3)}</span></div>`;
 }
@@ -245,6 +263,7 @@ document.getElementById("run").onclick = async () => {
   try { questions = JSON.parse(document.getElementById("questions").value); }
   catch (e) { out.innerHTML = `<div class="err">questions is not valid JSON: ${e.message}</div>`; return; }
   const body = { model: model.value, state: withImages(parseState(stateBox.value)), questions };
+  const images = imagesIn(body.state);
   const started = performance.now();
   const res = await fetch("/v1/systemone", { method: "POST", headers: { "content-type": "application/json", ...auth() },
                                              body: JSON.stringify(body) });
@@ -255,6 +274,7 @@ document.getElementById("run").onclick = async () => {
   for (const [id, a] of Object.entries(data.answers)) {
     html += `<div class="q"><b>${id} <span class="meta">${a.type}</span></b>`;
     if (a.type === "noul") html += bar("yes", a.noul) + bar("no", 1 - a.noul);
+    else if (a.type === "box") html += boxed(a, images, questions[id].instructions);
     else {
       for (const [k, p] of Object.entries(a.probabilities)) html += bar(a.type === "score" ? a.legend[k] : k, p);
       html += `<div class="meta">${a.type === "choice" ? "choice: " + a.choice : "score: " + a.score.toFixed(2)} · confidence ${a.confidence.toFixed(2)}</div>`;

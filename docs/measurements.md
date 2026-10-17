@@ -462,6 +462,38 @@ smaller iNaturalist photos (Glance: 0.33 s). Peak memory for the run was
 4.1 GB. The photos stay out of this repository, as Glance keeps them out of
 its own; the scripts that fetched and scored them are not part of it either.
 
+### Locating things in an image
+
+A box question is answered by generation: a `vision:` model is asked for the
+subject's bounding box the way its grounding training phrased it, writes the
+edges on a 1000 × 1000 grid over the image, and ruling reads them back as
+fractions. Checked on synthetic scenes, one colored square on a plain
+background at a known place, on four image shapes, by intersection over union
+with the truth:
+
+| Image | Square | IoU |
+|---|---|---|
+| 640 × 480 | 160 × 160, upper middle | 0.947 |
+| 1200 × 300 | 200 × 180, right | 0.962 |
+| 300 × 900 | 120 × 250, lower left | 0.821 |
+| 800 × 800 | 600 × 600, centered | 0.892 |
+
+Mean 0.906 on `vision:mlx-community/Qwen3.5-4B-4bit`, each edge within about
+1% of the image, with the image capped at 1024 tokens; a box asking for
+`<image 2>` of two lands on the second image's square beside scored questions
+in the same request, and each box takes about 0.3 s. The 0.8B writes numbers
+that follow no grid at all, so the box integration test runs on the 4B
+(`RULING_BOX_MODEL` picks another). Confidence, the geometric mean probability
+of each number's leading digit, was 0.6 to 0.9 on these. Text is harder: asked
+for the TOTAL line on the playground's drawn receipt, the 4B's box lands a
+line low, just under it, at confidence 0.51, so a low confidence does flag a
+loose box. Nothing here measures an absent target, since the scenes all hold
+one.
+
+```bash
+uv run python -m pytest tests/integration/test_assets_and_boxes.py -k lands -s    # prints the IoU per scene
+```
+
 ### Fine-tuning a vision model on photos
 
 The insect-order photos, split into stratified halves of 105 (seed 0), with

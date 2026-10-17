@@ -21,7 +21,7 @@ from ruling.calibration import Calibration
 from ruling.config import Settings, configure_memory
 from ruling.engine import Engine
 from ruling.evals import collect, fit, load_dataset, predict, report, write_json, write_predictions
-from ruling.questions import Choice, Noul, Score, SystemOneRequest
+from ruling.questions import Box, Choice, Noul, Score, SystemOneRequest
 from ruling.hosted import OpenRouterEngine
 from ruling.registry import build_engine
 from ruling.server import app_from_env
@@ -52,6 +52,8 @@ def main(argv: list[str] | None = None) -> None:
     ask.add_argument("--score", action="append", default=[], metavar="ID=Q|lo,mid,hi",
                      help="score question: id=instructions|level1,level2,...")
     ask.add_argument("--noul", action="append", default=[], metavar="ID=STATEMENT")
+    ask.add_argument("--box", action="append", default=[], metavar="ID=WHAT",
+                     help="box question: id=what to find, naming the image as <image N> when the state holds several")
     _engine_overrides(ask)
 
     for name, help_text in (("eval", "score a labeled dataset and report metrics"),
@@ -325,6 +327,9 @@ def main(argv: list[str] | None = None) -> None:
         for spec in args.noul:
             qid, _, statement = spec.partition("=")
             questions[qid] = Noul(instructions=statement)
+        for spec in args.box:
+            qid, _, what = spec.partition("=")
+            questions[qid] = Box(instructions=what)
         if not questions:
             # No typed question: read the words as one, the way the playground's ask tab does.
             from ruling.ask import ask, writer_for

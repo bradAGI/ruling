@@ -36,6 +36,7 @@ class FailoverEngine:
         self.max_branch_tokens = primary.max_branch_tokens
         self.max_options = primary.max_options
         self.reads_images = primary.reads_images
+        self.locates = False
         self.calibration = primary.calibration
 
     @property

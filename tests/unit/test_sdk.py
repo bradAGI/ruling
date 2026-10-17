@@ -9,7 +9,7 @@ import httpx
 import pytest
 from fastapi.testclient import TestClient
 
-from ruling import Image, RetryPolicy, RulingClient, RulingError
+from ruling import Box, Image, RetryPolicy, RulingClient, RulingError
 from ruling.ask import AskResponse, FACTS
 from ruling.questions import ChoiceAnswer, NoulAnswer
 from ruling.sdk import GZIP_THRESHOLD
@@ -129,3 +129,22 @@ def test_ask_returns_the_typed_reading_of_a_question_in_words():
         response = client.ask("is water wet?")
     assert isinstance(response, AskResponse) and set(response.facts) == set(FACTS)
     assert response.input == "is water wet?" and response.usage.input_tokens > 0
+
+
+def test_assets_and_box_questions_go_on_the_wire_as_the_server_reads_them(tmp_path):
+    from .test_images import png
+
+    path = tmp_path / "photo.png"
+    path.write_bytes(png(2, 2))
+    seen = {}
+
+    def handler(request):
+        seen.update(json.loads(request.content))
+        return httpx.Response(200, json={"model": "m", "usage": {"input_tokens": 1, "output_tokens": 3}, "answers": {
+            "where": {"type": "box", "box": {"top": 0.1, "bottom": 0.5, "left": 0.2, "right": 0.9}, "confidence": 0.8}}})
+
+    with RulingClient(base_url="http://t", transport=httpx.MockTransport(handler)) as client:
+        response = client.system_one(state="Find the stamp on <photo>", questions={"where": Box(instructions="the stamp on <photo>")},
+                                     assets={"<photo>": Image.from_path(path)})
+    assert seen["assets"] == {"<photo>": Image.from_path(path)} and seen["questions"]["where"]["type"] == "box"
+    assert response.answers["where"].box.right == 0.9 and response.usage.output_tokens == 3

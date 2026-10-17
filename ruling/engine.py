@@ -15,6 +15,9 @@ from __future__ import annotations
 import hashlib
 import json
 import threading
+from collections.abc import Iterator
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
@@ -61,6 +64,22 @@ PREFILL_STEP = 512
 # Suffix passes are batched until batch_size * (prefix + padded suffix) tokens
 # would exceed this budget, which bounds the memory of the replicated cache.
 BATCH_TOKEN_BUDGET = 65_536
+
+LONG_CONTEXT_TOKENS = 262_144
+"""The request and branch limits a request asking for long context gets, as the hosted API's are."""
+
+long_context: ContextVar[bool] = ContextVar("long_context", default=False)
+"""Set for the request being answered when its client asked for the extended limits; carried by the
+context so the engine behind any wrapper sees it without every wrapper passing it along."""
+
+
+@contextmanager
+def extended_context() -> Iterator[None]:
+    token = long_context.set(True)
+    try:
+        yield
+    finally:
+        long_context.reset(token)
 
 # For a Choice with more options than single-token codes, every option is first
 # scored on its own as a Noul and the strongest few go to a final Choice.
@@ -263,9 +282,11 @@ class Engine(TwoStageChoice):
         prior_debias: bool = True,
         adapter: Path | None = None,
         max_branch_tokens: int | None = None,
+        long_context_tokens: int = LONG_CONTEXT_TOKENS,
     ):
         if rotations < 1:
             raise ValueError("rotations must be at least 1")
+        self.long_context_tokens = long_context_tokens
         self.model_id = model_id
         self.max_input_tokens = max_input_tokens
         self.max_branch_tokens = max_branch_tokens or max_input_tokens
@@ -284,6 +305,7 @@ class Engine(TwoStageChoice):
         self._system_role = self._template_accepts_system_role()
         self.max_options = MAX_CHOICE_OPTIONS
         self.reads_images = False
+        self.locates = False
         self._shared = _SharedModel()
         self._shared.lora = json.loads((adapter / ADAPTER_CONFIG).read_text()) if adapter else None
         self._shared.active = self
@@ -392,7 +414,16 @@ class Engine(TwoStageChoice):
 
     # ---- scoring -----------------------------------------------------------
 
+    def limits(self) -> tuple[int, int]:
+        """The request and branch token limits for the request being answered: the configured ones,
+        or the long-context ones when its client asked for them."""
+        if long_context.get():
+            return (max(self.long_context_tokens, self.max_input_tokens),
+                    max(self.long_context_tokens, self.max_branch_tokens))
+        return self.max_input_tokens, self.max_branch_tokens
+
     def _score_plain(self, state: State, questions: dict[str, Choice | Score | Noul]) -> Scored:
+        max_input_tokens, max_branch_tokens = self.limits()
         prefix = self._prefix(state)
         prefix_tokens = prefix.tokens
         passes = [
@@ -401,14 +432,14 @@ class Engine(TwoStageChoice):
             for rendered in (render_question(question, self.codes.codes, r) for r in self._rotations_for(question))
         ]
         widest = max((p for p in passes), key=lambda p: len(p.tokens), default=None)
-        if widest is not None and len(prefix_tokens) + len(widest.tokens) > self.max_branch_tokens:
+        if widest is not None and len(prefix_tokens) + len(widest.tokens) > max_branch_tokens:
             raise InputTooLong(f"question {widest.question_id!r} makes a branch of "
                                f"{len(prefix_tokens) + len(widest.tokens)} tokens, over the maximum context length "
-                               f"of {self.max_branch_tokens} for one branch", question_id=widest.question_id)
+                               f"of {max_branch_tokens} for one branch", question_id=widest.question_id)
         total = len(prefix_tokens) + sum(len(p.tokens) for p in passes)
-        if total > self.max_input_tokens:
+        if total > max_input_tokens:
             raise InputTooLong(f"request is {total} tokens, over the maximum context length of "
-                               f"{self.max_input_tokens} for a whole request")
+                               f"{max_input_tokens} for a whole request")
 
         per_question: dict[str, dict[str, list[float]]] = {qid: {} for qid in questions}
         with self._lock:

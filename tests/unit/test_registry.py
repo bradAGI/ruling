@@ -16,6 +16,7 @@ class FakeEngine:
     prior_debias = False
     max_options = 255
     reads_images = False
+    locates = False
     rotations = 1
     max_input_tokens = max_branch_tokens = 1000
     revision = adapter = None
