@@ -177,7 +177,10 @@ def writer_messages(text: str, allowed: tuple[str, ...], pictures: int, sees: bo
         seen = "shown to you here" if sees else "which you cannot see"
         about = (f"\nThe input comes with {pictures} picture{'s' if pictures > 1 else ''}, {seen}; the decision model "
                  f"sees {'them' if pictures > 1 else 'it'}. Write the question about what the input asks of the "
-                 f"picture, naming it as {names}.")
+                 f"picture, naming it as {names} in the instructions. The options or levels are possible answers "
+                 f"for the decision model to choose between, 2 to 8 of them, never a description of the picture: "
+                 f"for \"what is this?\" of a photo, options such as \"a church interior: ...\", \"a museum "
+                 f"hall: ...\", \"a theater: ...\".")
     return [{"role": "system", "content": WRITER_SYSTEM + leash + about}, {"role": "user", "content": f"Input: {text}"}]
 
 
