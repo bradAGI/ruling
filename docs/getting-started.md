@@ -72,6 +72,8 @@ model stands by it. Under the answer, "how it got there" shows all nine
 readings and the writer's reply byte for byte, and **open in decide** puts
 the typed questions behind the answer into the decide tab to read or change.
 
+![The ask tab: a question in plain words read as a pick, the answer, and its check](../assets/playground-ask.png)
+
 A question can come with pictures: pick them under the question box on a
 `vision:` model, and they travel with the input as `<image 1>`, `<image 2>`,
 … Every reading is made with the pictures in view, and a vision model writes

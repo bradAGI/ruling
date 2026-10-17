@@ -42,6 +42,24 @@ clone the repository and `uv sync`; see [Development](docs/development.md).
 On NVIDIA, see [vLLM](docs/reference.md#on-nvidia-vllm). Before relying on an
 answer, read the [limits](docs/getting-started.md#limits).
 
+## The playground
+
+**ask** takes a question in plain words. The model first reads it as typed
+questions about the input (is it answerable, a yes or no, a pick, a how much,
+a how likely?), writes the options a pick needs, judges them, and checks its
+own answer; every reading is shown under the answer.
+
+<p align="center">
+  <img src="assets/playground-ask.png" alt="The ask tab: a question in plain words, read as a pick, answered Python with p = 1.00 and checked" width="720" />
+</p>
+
+**decide** is the API itself: a state, typed questions as JSON, a model
+picker, and each answer's probabilities as bars.
+
+<p align="center">
+  <img src="assets/playground.png" alt="The decide tab: a state, three typed questions, and each answer's probabilities as bars" width="720" />
+</p>
+
 ## Reading more
 
 - [Results](docs/results.md) and the [full measurements](docs/measurements.md),
