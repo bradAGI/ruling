@@ -38,8 +38,19 @@
   section[hidden] { display: none; }
   #question { min-height: 80px; }
   #ask-out { grid-column: 1 / -1; display: grid; gap: 12px; }
-  .said { font-size: 22px; margin: 2px 0 4px; }
-  .work { border-top: 1px dashed var(--line); margin-top: 8px; padding-top: 8px; }
+  #ask-out .row { grid-template-columns: minmax(180px, 2fr) 3fr 60px; }
+  .said { font-size: 24px; margin: 2px 0 6px; display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; }
+  .said .p { font-size: 14px; color: var(--muted); }
+  .badge { display: inline-block; font-size: 12px; padding: 1px 8px; border-radius: 10px; border: 1px solid var(--line); color: var(--muted); }
+  .badge.ok { border-color: var(--bar); color: var(--bar); }
+  .badge.doubt { border-color: var(--accent); color: var(--accent); }
+  .work { border-top: 1px dashed var(--line); margin-top: 10px; padding-top: 8px; }
+  .facts { display: grid; grid-template-columns: repeat(auto-fill, minmax(290px, 1fr)); gap: 8px; margin-top: 8px; }
+  .facts .q { padding: 8px 10px; font-size: 12px; }
+  .facts .q b { margin-bottom: 4px; }
+  .facts .row { grid-template-columns: 100px 1fr 44px; font-size: 12px; gap: 6px; }
+  .facts .bar { height: 7px; }
+  .facts .reading { color: var(--muted); font-weight: normal; margin-left: 6px; }
   details summary { cursor: pointer; color: var(--muted); font-size: 12px; }
   pre { white-space: pre-wrap; font: inherit; font-size: 12px; margin: 6px 0; }
   @media (max-width: 700px) { main { grid-template-columns: 1fr; } section { grid-template-columns: 1fr; } }
@@ -279,6 +290,17 @@ function answerBars(a) {
   for (const [k, p] of Object.entries(a.probabilities)) html += bar(a.type === "score" ? a.legend[k] : k, p);
   return html;
 }
+// The probability behind what was said: of yes or no for a noul, of the winning option or level otherwise.
+function saidProbability(a) {
+  if (a.type === "noul") return Math.max(a.noul, 1 - a.noul);
+  return Math.max(...Object.values(a.probabilities));
+}
+// One line on what a fact was read as, for the compact cards.
+function factReading(id, a) {
+  if (a.type === "choice") return KIND_WORDS[a.choice];
+  if (a.type === "score") { const top = Object.entries(a.probabilities).sort((x, y) => y[1] - x[1])[0][0]; return a.legend[top]; }
+  return a.noul >= 0.5 ? "yes" : "no";
+}
 function askHtml(data, ms) {
   let html = `<div class="meta">${data.model} · ${data.usage.input_tokens} input tokens · ${ms} ms`;
   if (data.readings.length) html += ` · read as ${data.readings.map(k => KIND_WORDS[k]).join(" and ")}`;
@@ -288,15 +310,19 @@ function askHtml(data, ms) {
   if (data.refused) html += `<div class="q"><div class="said">No. That's not a question I can answer.</div><div class="meta">the model judged the input is not a question its types answer</div></div>`;
   for (const s of data.answers) {
     const who = s.source === "fact" ? "answered in the first request" : "options written by the model, then judged";
-    const check = s.checked == null ? "" : s.checked >= 0.5 ? ` · checked: stands by it (${s.checked.toFixed(2)})` : ` · <span class="err">checked: doubts this answer (${s.checked.toFixed(2)})</span>`;
-    html += `<div class="q"><div class="said">${s.said}</div><div class="meta">${KIND_WORDS[s.kind]} · ${who}${check}</div>`;
+    const check = s.checked == null ? "" : s.checked >= 0.5
+      ? `<span class="badge ok">checked · stands by it ${s.checked.toFixed(2)}</span>`
+      : `<span class="badge doubt">checked · doubts this answer ${s.checked.toFixed(2)}</span>`;
+    html += `<div class="q"><div class="said">${s.said}<span class="p">p = ${saidProbability(s.answer).toFixed(2)}</span>${check}</div>`;
+    html += `<div class="meta">${KIND_WORDS[s.kind]} · ${who}</div>`;
     html += `<div class="work"><div class="meta">${s.question.instructions}</div>${answerBars(s.answer)}</div></div>`;
   }
   for (const d of data.dropped) html += `<div class="meta err">${d}</div>`;
-  html += `<details><summary>how it got there: the nine questions, and what the writer wrote</summary>`;
+  html += `<details><summary>how it got there: the nine questions, and what the writer wrote</summary><div class="facts">`;
   for (const [id, a] of Object.entries(data.facts)) {
-    html += `<div class="q"><b>${id} <span class="meta">${a.type}</span></b>${answerBars(a)}</div>`;
+    html += `<div class="q"><b>${id}<span class="reading">${factReading(id, a)}</span></b>${answerBars(a)}</div>`;
   }
+  html += `</div>`;
   if (data.wrote != null) html += `<div class="q"><b>the writer's reply</b><pre></pre></div>`;
   html += `</details><button type="button" id="open-decide" class="small">open in decide</button>`;
   return html;
