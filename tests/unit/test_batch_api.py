@@ -238,7 +238,10 @@ def test_a_gzipped_body_is_read_as_plain_json_and_a_broken_one_is_refused():
 def test_a_zstd_body_is_read_as_the_hosted_sdk_sends_it_and_other_encodings_are_415():
     """TypeSafe's SDKs compress every body over 1 KiB with zstd on their own; a server that only inflated
     gzip would refuse their ordinary requests."""
-    from backports.zstd import compress
+    try:
+        from compression.zstd import compress
+    except ImportError:  # before Python 3.14 the same module ships as a backport
+        from backports.zstd import compress
 
     decision = {k: ROW[k] for k in ("state", "questions")}
     with TestClient(app_with()) as client:
