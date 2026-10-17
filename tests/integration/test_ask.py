@@ -29,11 +29,14 @@ def test_the_served_model_writes_options_that_are_then_judged(single_engine):
     writer = LocalWriter(single_engine)
     reply = writer.write("what is the best text editor", ("choice",))
     assert reply.strip()
-    # Whatever the small model wrote, a choice it drafted is judged on the input and shown as the model's pick.
+    # Whatever the small model wrote, only the tools the rules asked for are judged and shown.
     response = ask(single_engine, writer, "what is the best text editor")
+    wanted = plan(response.facts).wanted
     for shown in response.answers:
         if shown.source == "writer":
-            assert shown.question.type in ("choice", "score") and shown.said.endswith(".")
+            assert shown.question.type in wanted and shown.said.endswith(".")
+    if wanted:
+        assert response.wrote is not None
 
 
 def test_the_routing_cases_are_read_without_error_and_the_tally_is_reported(single_engine, capsys):
