@@ -317,10 +317,15 @@ class Trainer:
             model.load_weights(str(config.from_adapter / "adapters.safetensors"), strict=False)
             mx.eval(model.parameters())
 
-        self.train_examples = self._examples(self.train_records)
-        valid = self._examples(self.valid_records)
+        self.train_examples, dropped_train = self._fitting(self.train_records, self._examples(self.train_records))
+        valid, dropped_valid = self._fitting(self.valid_records, self._examples(self.valid_records))
+        self.dropped = {"train": dropped_train, "valid": dropped_valid}
         self.valid_examples = [valid[i] for i in self.rng.permutation(len(valid))[: config.valid_examples]]
         if not self.train_examples or not self.valid_examples:
+            if dropped_train or dropped_valid:
+                raise ValueError(f"{dropped_train} train and {dropped_valid} validation examples are longer than "
+                                 f"max_tokens {config.max_tokens}, leaving {len(self.train_examples)} and "
+                                 f"{len(self.valid_examples)}; raise --max-tokens")
             raise ValueError("training and validation both need labeled questions")
 
     def _check_adapter(self, adapter: Path) -> None:
@@ -342,20 +347,32 @@ class Trainer:
                     examples.append(Example(index, qid, record.weight))
         return examples
 
+    def _tokens(self, record: Record, question: Choice | Score | Noul, rotation: int):
+        """The example as the model reads it (state, question, answer cue), the option keys in presented order,
+        and whether the state holds images."""
+        rendered = render_question(question, self.engine.codes.codes, rotation)
+        prefix = self.engine._prefix(record.state)
+        return prefix.tokens + self.engine._encode(rendered.text + prefix.tail), rendered.keys, prefix.vision_inputs is not None
+
+    def _fitting(self, records: list[Record], examples: list[Example]) -> tuple[list[Example], int]:
+        """The examples that fit `max_tokens` as written, and how many do not. A run that dropped them one chunk
+        at a time could finish having trained on nothing, so they are counted before the first step."""
+        kept = [e for e in examples
+                if len(self._tokens(records[e.record], records[e.record].questions[e.question_id], 0)[0]) <= self.config.max_tokens]
+        return kept, len(examples) - len(kept)
+
     def _render(self, records: list[Record], example: Example, augment: bool):
         """The example's tokens, its target over the presented options, its weight, and its state when the
         state holds images (read again when its batch runs, so a chunk of batches never holds their pixels)."""
         record = records[example.record]
         question = record.questions[example.question_id]
         presented, rotation = permuted(question, self.rng) if augment else (question, 0)
-        rendered = render_question(presented, self.engine.codes.codes, rotation)
-        prefix = self.engine._prefix(record.state)
-        tokens = prefix.tokens + self.engine._encode(rendered.text + prefix.tail)
+        tokens, keys, pictured = self._tokens(record, presented, rotation)
         if len(tokens) > self.config.max_tokens:
+            # Permuting the options can move a token boundary, so an example at the edge may still not fit.
             return None
         target = target_vector(record, example.question_id)
-        seen = record.state if prefix.vision_inputs is not None else None
-        return tokens, [target[key] for key in rendered.keys], example.weight, seen
+        return tokens, [target[key] for key in keys], example.weight, record.state if pictured else None
 
     def _batch(self, rendered: list[tuple[list[int], list[float], float, object]]):
         width = math.ceil(max(len(t) for t, _, _, _ in rendered) / 32) * 32
@@ -420,7 +437,7 @@ class Trainer:
         model.eval()
         losses, top, correct = [], [], []
         size = self.config.batch_size
-        rendered = [r for r in (self._render(self.valid_records, e, augment=False) for e in self.valid_examples) if r is not None]
+        rendered = [self._render(self.valid_records, e, augment=False) for e in self.valid_examples]
         rendered.sort(key=lambda c: len(c[0]))
         for start in range(0, len(rendered), size):
             group = rendered[start:start + size]
@@ -448,7 +465,8 @@ class Trainer:
         data = [{"path": str(p), "sha256": hashlib.sha256(p.read_bytes()).hexdigest()} for p in self.config.data]
         meta = {"config": {**config_json(self.config), "data": data},
                 "base_revision": self.engine.revision, "train_records": len(self.train_records),
-                "train_examples": len(self.train_examples), "valid_examples": len(self.valid_examples), "history": history}
+                "train_examples": len(self.train_examples), "valid_examples": len(self.valid_examples),
+                "dropped_examples": self.dropped, "history": history}
         (directory / TRAINING).write_text(json.dumps(meta, indent=2) + "\n")
 
     def run(self, log=print, sink=None) -> list[dict]:
@@ -465,6 +483,9 @@ class Trainer:
         step_fn = nn.value_and_grad(model, self.loss)
         trainable = sum(v.size for _, v in tree_flatten(model.trainable_parameters()))
         log(f"trainable parameters {trainable:,}; {len(self.train_examples):,} train and {len(self.valid_examples):,} validation examples")
+        if any(self.dropped.values()):
+            log(f"dropped {self.dropped['train']:,} train and {self.dropped['valid']:,} validation examples longer than "
+                f"max_tokens {config.max_tokens}")
 
         def record(entry: dict) -> None:
             history.append(entry)

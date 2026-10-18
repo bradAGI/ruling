@@ -228,3 +228,18 @@ def test_wandb_sink_names_the_extra_to_install_when_the_package_is_missing(tmp_p
     monkeypatch.setitem(sys.modules, "wandb", None)
     with pytest.raises(ImportError, match=r"pip install 'ruling\[wandb\]'"):
         WandbSink("tickets", _config(tmp_path))
+
+
+def test_examples_longer_than_max_tokens_are_dropped_and_counted():
+    from types import SimpleNamespace
+
+    from ruling.engine import _Prefix
+    from ruling.train import Example, Trainer
+
+    records = [record(state="short", labels={"rain": True}), record(state="a much longer state", labels={"rain": True})]
+    examples = [Example(0, "rain", 1.0), Example(1, "rain", 1.0)]
+    engine = SimpleNamespace(codes=SimpleNamespace(codes="ABC"), _prefix=lambda state: _Prefix(list(state), ""),
+                             _encode=lambda text: [0])
+    stub = SimpleNamespace(engine=engine, config=SimpleNamespace(max_tokens=6), _tokens=None)
+    stub._tokens = lambda *args: Trainer._tokens(stub, *args)
+    assert Trainer._fitting(stub, records, examples) == ([Example(0, "rain", 1.0)], 1)

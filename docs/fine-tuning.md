@@ -103,9 +103,11 @@ tower stays frozen and LoRA trains the language layers that read its
 features. Records without images can sit in the same file. Keep
 `--max-image-tokens` equal to the server's `RULING_MAX_IMAGE_TOKENS`, so the
 adapter sees images at the size it will be served them, and raise
-`--max-tokens` to fit the image and the question: an example longer than it
-is skipped. A text model refuses records with images rather than training
-on their text alone.
+`--max-tokens` to fit the image and the question. An example longer than it
+is dropped: the run says how many before its first step and records the
+count in `training.json`, and a run with no example left refuses to start.
+A text model refuses records with images rather than training on their text
+alone.
 
 Expect it to be slow and to need steps. The vision models are Qwen3.5, whose
 hybrid attention trains 15 to 30 times slower in MLX than a pure-attention

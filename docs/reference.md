@@ -363,8 +363,10 @@ their defaults the loss is exactly the soft-target cross-entropy.
 hold images train as they are served: the image tokens sit in the prompt, the
 vision tower stays frozen, and LoRA trains the language layers that read
 them. Raise `--max-tokens` to fit them; at the default 1,024 tokens per image
-the default `--max-tokens` of 1,024 leaves no room for the question. A text
-model refuses records with images rather than training on their text alone.
+the default `--max-tokens` of 1,024 leaves no room for the question. Examples
+longer than `--max-tokens` are dropped and counted before the first step, and
+a run they would empty refuses to start. A text model refuses records with
+images rather than training on their text alone.
 Measured on the 0.8B test model, teaching an arbitrary code for each of three
 colors took 300 steps at a learning rate of 3e-5 to bring the validation loss
 from 2.3 to 0.4; far fewer steps, or higher rates, left it at chance.
