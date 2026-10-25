@@ -104,8 +104,11 @@ features. Records without images can sit in the same file. Keep
 `--max-image-tokens` equal to the server's `RULING_MAX_IMAGE_TOKENS`, so the
 adapter sees images at the size it will be served them, and raise
 `--max-tokens` to fit the image and the question. An example longer than it
-is dropped: the run says how many before its first step and records the
-count in `training.json`, and a run with no example left refuses to start.
+is dropped: the run says how many before its first step, and the
+`--max-tokens` that would keep them all, records the count in
+`training.json`, and refuses to start with no example left. The limit is not
+raised on its own, since one outlier would then set the memory every batch
+may take.
 A text model refuses records with images rather than training on their text
 alone.
 

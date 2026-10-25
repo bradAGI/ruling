@@ -209,5 +209,5 @@ def test_wandb_receives_every_history_entry_as_the_run_makes_it(watched_run):
 def test_a_run_whose_examples_all_exceed_max_tokens_refuses_to_start(small_data, test_model, tmp_path):
     """Before this was counted, such a run trained on nothing and reported NaN validation without an error."""
     config, _ = _small_run(test_model, small_data, tmp_path / "short", max_tokens=8)
-    with pytest.raises(ValueError, match="longer than max_tokens 8"):
+    with pytest.raises(ValueError, match=r"longer than max_tokens 8.*--max-tokens \d+ keeps them all"):
         Trainer(config)

@@ -242,4 +242,5 @@ def test_examples_longer_than_max_tokens_are_dropped_and_counted():
                              _encode=lambda text: [0])
     stub = SimpleNamespace(engine=engine, config=SimpleNamespace(max_tokens=6), _tokens=None)
     stub._tokens = lambda *args: Trainer._tokens(stub, *args)
-    assert Trainer._fitting(stub, records, examples) == ([Example(0, "rain", 1.0)], 1)
+    # The longest example, state and question as the model reads them, is the limit that would keep them all.
+    assert Trainer._fitting(stub, records, examples) == ([Example(0, "rain", 1.0)], 1, 20)

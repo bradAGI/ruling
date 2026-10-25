@@ -317,15 +317,16 @@ class Trainer:
             model.load_weights(str(config.from_adapter / "adapters.safetensors"), strict=False)
             mx.eval(model.parameters())
 
-        self.train_examples, dropped_train = self._fitting(self.train_records, self._examples(self.train_records))
-        valid, dropped_valid = self._fitting(self.valid_records, self._examples(self.valid_records))
+        self.train_examples, dropped_train, longest_train = self._fitting(self.train_records,
+                                                                          self._examples(self.train_records))
+        valid, dropped_valid, longest_valid = self._fitting(self.valid_records, self._examples(self.valid_records))
         self.dropped = {"train": dropped_train, "valid": dropped_valid}
+        self.longest = max(longest_train, longest_valid)
         self.valid_examples = [valid[i] for i in self.rng.permutation(len(valid))[: config.valid_examples]]
         if not self.train_examples or not self.valid_examples:
             if dropped_train or dropped_valid:
-                raise ValueError(f"{dropped_train} train and {dropped_valid} validation examples are longer than "
-                                 f"max_tokens {config.max_tokens}, leaving {len(self.train_examples)} and "
-                                 f"{len(self.valid_examples)}; raise --max-tokens")
+                raise ValueError(f"{self._dropped_note()}, leaving {len(self.train_examples)} and "
+                                 f"{len(self.valid_examples)}")
             raise ValueError("training and validation both need labeled questions")
 
     def _check_adapter(self, adapter: Path) -> None:
@@ -354,12 +355,18 @@ class Trainer:
         prefix = self.engine._prefix(record.state)
         return prefix.tokens + self.engine._encode(rendered.text + prefix.tail), rendered.keys, prefix.vision_inputs is not None
 
-    def _fitting(self, records: list[Record], examples: list[Example]) -> tuple[list[Example], int]:
-        """The examples that fit `max_tokens` as written, and how many do not. A run that dropped them one chunk
-        at a time could finish having trained on nothing, so they are counted before the first step."""
-        kept = [e for e in examples
-                if len(self._tokens(records[e.record], records[e.record].questions[e.question_id], 0)[0]) <= self.config.max_tokens]
-        return kept, len(examples) - len(kept)
+    def _fitting(self, records: list[Record], examples: list[Example]) -> tuple[list[Example], int, int]:
+        """The examples that fit `max_tokens` as written, how many do not, and the longest one's length, the limit
+        that would keep them all. A run that dropped them one chunk at a time could finish having trained on
+        nothing, so they are counted before the first step."""
+        lengths = [len(self._tokens(records[e.record], records[e.record].questions[e.question_id], 0)[0]) for e in examples]
+        kept = [e for e, length in zip(examples, lengths) if length <= self.config.max_tokens]
+        return kept, len(examples) - len(kept), max(lengths, default=0)
+
+    def _dropped_note(self) -> str:
+        # The limit is not raised to fit on its own: one outlier would set the memory every batch may take.
+        return (f"{self.dropped['train']:,} train and {self.dropped['valid']:,} validation examples are longer than "
+                f"max_tokens {self.config.max_tokens}; --max-tokens {self.longest} keeps them all")
 
     def _render(self, records: list[Record], example: Example, augment: bool):
         """The example's tokens, its target over the presented options, its weight, and its state when the
@@ -484,8 +491,7 @@ class Trainer:
         trainable = sum(v.size for _, v in tree_flatten(model.trainable_parameters()))
         log(f"trainable parameters {trainable:,}; {len(self.train_examples):,} train and {len(self.valid_examples):,} validation examples")
         if any(self.dropped.values()):
-            log(f"dropped {self.dropped['train']:,} train and {self.dropped['valid']:,} validation examples longer than "
-                f"max_tokens {config.max_tokens}")
+            log(f"dropped: {self._dropped_note()}")
 
         def record(entry: dict) -> None:
             history.append(entry)
