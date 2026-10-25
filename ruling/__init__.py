@@ -12,9 +12,10 @@ from ruling.questions import (
     SystemOneRequest,
     SystemOneResponse,
 )
-from ruling.sdk import Image, RetryPolicy, RulingClient, RulingError
+from ruling.sdk import AsyncRulingClient, Image, RetryPolicy, RulingClient, RulingError
 
 __all__ = [
+    "AsyncRulingClient",
     "Box",
     "BoxAnswer",
     "Choice",

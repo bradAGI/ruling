@@ -875,6 +875,18 @@ talks to a server that requires a key. With a ledger, `response.id` and
 `system_one(..., exclude_from_training=True)` keeps a decision out of it.
 `client.models()` lists the served models.
 
+`AsyncRulingClient` has every method of `RulingClient` as a coroutine, with
+the same retries, so one event loop can keep many decisions in flight:
+
+```python
+import asyncio
+from ruling import AsyncRulingClient
+
+async def triage(tickets):
+    async with AsyncRulingClient() as client:
+        return await asyncio.gather(*(client.system_one(state=t.body, questions=questions) for t in tickets))
+```
+
 Batches go through the same client. `predict` takes rows in any
 [dataset](#datasets) shape and returns one entry per row in order, each
 answer parsed into the same `ChoiceAnswer`, `ScoreAnswer` and `NoulAnswer`

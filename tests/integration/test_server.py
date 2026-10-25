@@ -347,3 +347,31 @@ def test_a_retry_after_a_lost_response_is_answered_with_the_decision_already_log
         thread.join(timeout=10)
     assert network.sent == 2
     assert DecisionLedger(ledger).ids() == [decision.id]
+
+
+def test_the_async_client_answers_many_decisions_at_once_and_reports_outcomes(engine, tmp_path):
+    import asyncio
+
+    from ruling import AsyncRulingClient
+    from tests.unit.test_sdk import run_async
+
+    ledger = tmp_path / "ledger.sqlite"
+    server, thread, url = _serve(create_app(Registry.single(engine), None, 4, DecisionLedger(ledger)))
+    refund = {"refund": Noul(instructions="The customer asks for a refund.")}
+
+    async def run():
+        async with AsyncRulingClient(base_url=url) as client:
+            decisions = await asyncio.gather(*(client.system_one(state=PAYLOAD["state"], questions=refund)
+                                               for _ in range(3)))
+            stored = await client.outcomes([{"id": d.id, "labels": {"refund": True}} for d in decisions])
+            return decisions, stored, await client.models()
+
+    try:
+        decisions, stored, models = run_async(run())
+    finally:
+        server.should_exit = True
+        thread.join(timeout=10)
+    assert len({d.id for d in decisions}) == 3 and all(d.answers["refund"].noul > 0.5 for d in decisions)
+    assert [s["id"] for s in stored] == [d.id for d in decisions]
+    assert models[0].name == engine.model_id
+    assert sorted(r.id for r in DecisionLedger(ledger).records()) == sorted(d.id for d in decisions)

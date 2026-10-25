@@ -17,6 +17,16 @@ from ruling.sdk import GZIP_THRESHOLD
 from .test_batch_api import NOUL, ROW, SINGLE, ScoringEngine, app_with, no_hub_lookups  # noqa: F401
 
 
+def run_async(coroutine):
+    """Run a coroutine to its result on a thread of its own: the browser tests keep an event loop running on the
+    main thread for the whole session, where `asyncio.run` refuses to start another."""
+    import asyncio
+    from concurrent.futures import ThreadPoolExecutor
+
+    with ThreadPoolExecutor(1) as pool:
+        return pool.submit(asyncio.run, coroutine).result()
+
+
 def client_for(app, **kwargs) -> RulingClient:
     """The SDK unchanged, its requests relayed into the app in-process."""
     served = TestClient(app)
@@ -74,6 +84,38 @@ def test_retries_wait_as_long_as_the_server_says_then_back_off(monkeypatch):
                       retry=RetryPolicy(max_retries=3, backoff_initial=0.5, backoff_max=5.0)) as client:
         assert client.models() == []
     assert len(attempts) == 4 and slept == [3.0, 1.0, 2.0]
+
+
+def test_the_async_client_retries_on_the_same_schedule_and_raises_the_same_errors(monkeypatch):
+    from ruling import AsyncRulingClient
+
+    attempts, slept = [], []
+
+    async def asleep(seconds):
+        slept.append(seconds)
+
+    monkeypatch.setattr("ruling.sdk.asleep", asleep)
+
+    def handler(request):
+        attempts.append(request)
+        if len(attempts) == 1:
+            return httpx.Response(429, headers={"retry-after": "3"}, json={"error": {"code": "queue_full", "message": "full"}})
+        if len(attempts) == 2:
+            raise httpx.ConnectError("refused", request=request)
+        if len(attempts) == 3:
+            return httpx.Response(200, json={"models": []})
+        return httpx.Response(404, json={"error": {"code": "unknown_decision", "message": "no", "param": "id"}})
+
+    async def run():
+        async with AsyncRulingClient(base_url="http://t", transport=httpx.MockTransport(handler),
+                                     retry=RetryPolicy(max_retries=3, backoff_initial=0.5)) as client:
+            assert await client.models() == []
+            with pytest.raises(RulingError) as missing:
+                await client.outcome("x", {"refund": True})
+        return missing.value
+
+    missing = run_async(run())
+    assert slept == [3.0, 1.0] and (missing.status, missing.code) == (404, "unknown_decision")
 
 
 def test_retries_give_up_after_the_policy_and_raise_the_last_error(monkeypatch):
