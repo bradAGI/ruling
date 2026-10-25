@@ -154,3 +154,18 @@ def test_a_key_is_forgotten_with_the_decision_retention_drops(tmp_path):
     clock["now"] += 61
     fresh = ledger.record(REQUEST, RESPONSE, "k1")                 # the key now belongs to nothing still held
     assert fresh != stale and ledger.ids() == [fresh] and ledger.replay("k1").id == fresh
+
+
+def test_unresolved_decisions_come_back_newest_first_without_labels_or_untrainable_questions(tmp_path):
+    from ruling.questions import Box, BoxAnswer, BoxCoordinates
+
+    ledger = DecisionLedger(tmp_path / "ledger.sqlite")
+    boxed = SystemOneRequest(state="s", questions={**REQUEST.questions, "where": Box(instructions="the total")})
+    boxed_response = RESPONSE.model_copy(update={"answers": {**RESPONSE.answers, "where": BoxAnswer(
+        box=BoxCoordinates(top=0, bottom=1, left=0, right=1), confidence=0.5)}})
+    old, resolved, new = (ledger.record(boxed, boxed_response) for _ in range(3))
+    ledger.outcome(resolved, {"team": "billing"})
+    records = ledger.unresolved(5)
+    assert [r.id for r in records] == [new, old]
+    assert all(set(r.questions) == {"team", "refund"} and not r.labels for r in records)
+    assert [r.id for r in ledger.unresolved(1)] == [new]

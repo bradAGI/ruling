@@ -159,6 +159,9 @@ def main(argv: list[str] | None = None) -> None:
                        help="do nothing until this many decisions have outcomes")
     for name, kind in RETRAIN_OPTIONS:
         again.add_argument(f"--{name}", type=kind)
+    again.add_argument("--replay", type=int, default=0, metavar="N",
+                       help="also train on up to N of the newest decisions without outcomes, as the served version "
+                            "answered them, so the new version stays close to it elsewhere")
     again.add_argument("--promote", action=argparse.BooleanOptionalAction, default=True,
                        help="serve a better version at once; --no-promote holds it as the preview for `ruling promote`")
 
@@ -283,7 +286,8 @@ def main(argv: list[str] | None = None) -> None:
         settings = Settings.from_env()
         options = {name.replace("-", "_"): getattr(args, name.replace("-", "_")) for name, _ in RETRAIN_OPTIONS}
         retrain(DecisionLedger(args.ledger), args.adapters, args.model or settings.model, args.holdout, settings,
-                args.min_records, {k: v for k, v in options.items() if v is not None}, auto_promote=args.promote)
+                args.min_records, {k: v for k, v in options.items() if v is not None}, auto_promote=args.promote,
+                replay=args.replay)
         return
     if args.command == "promote":
         from ruling.retrain import promote_version

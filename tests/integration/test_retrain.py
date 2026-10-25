@@ -12,6 +12,7 @@ from ruling.build import write
 from ruling.calibration import Calibration
 from ruling.cli import main
 from ruling.config import Settings
+from ruling.evals import load_dataset
 from ruling.ledger import DecisionLedger
 from ruling.registry import Registry, build_engine
 from ruling.retrain import CALIBRATION, CURRENT, PREVIEW, REPORT, history, should_promote
@@ -35,6 +36,11 @@ def test_served_outcomes_train_a_version_that_is_promoted_only_if_better(engine,
             assert client.post(f"/v1/decisions/{decision}/outcome", json={"labels": record.labels}).status_code == 200
         # A benchmark row sent through the server never becomes training data.
         client.post("/v1/systemone", json={**body, "exclude_from_training": True})
+        # Decisions nobody reported on are what replay trains on.
+        unresolved = [r for r in states.generate(400, seed=23) if r.family == "state_access"][:4]
+        for record in unresolved:
+            client.post("/v1/systemone", json={"state": record.state, "questions": {
+                qid: q.model_dump(exclude_none=True) for qid, q in record.questions.items()}})
 
     monkeypatch.setenv("RULING_ROTATIONS", "1")
     command = ["retrain", "--ledger", str(ledger_path), "--adapters", str(adapters), "--holdout", str(holdout),
@@ -66,8 +72,13 @@ def test_served_outcomes_train_a_version_that_is_promoted_only_if_better(engine,
 
     # Held back, a third version is only the preview; the server answers it by name beside the served one.
     before = (adapters / CURRENT).resolve().name if (adapters / CURRENT).exists() else None
-    main([*command, "--min-records", "20", "--no-promote"])
+    main([*command, "--min-records", "20", "--no-promote", "--replay", "4"])
     report = json.loads((adapters / "v3" / REPORT).read_text())
+    replayed = load_dataset(adapters / "v3" / "replay.jsonl")
+    assert report["replayed"] == len(replayed) == 4
+    assert sorted(json.dumps(r.state, sort_keys=True) for r in replayed) == \
+        sorted(json.dumps(r.state, sort_keys=True) for r in unresolved)
+    assert all(not r.labels and set(r.references[qid]) == {"target"} for r in replayed for qid in r.questions)
     assert not report["promoted"] and (adapters / PREVIEW).resolve().name == "v3"
     assert ((adapters / CURRENT).resolve().name if (adapters / CURRENT).exists() else None) == before
     main(["promote", "--adapters", str(adapters), "v1"])

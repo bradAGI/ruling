@@ -23,6 +23,7 @@ from pathlib import Path
 
 from pydantic import BaseModel, Field, model_validator
 
+from ruling.calibration import QUESTION_TYPES
 from ruling.evals import Label, Record, label_index
 from ruling.questions import (QUESTION, Choice, ChoiceAnswer, Noul, NoulAnswer, Score, ScoreAnswer, Strict,
                               SystemOneRequest, SystemOneResponse, option_keys)
@@ -222,6 +223,20 @@ class DecisionLedger:
             labeled = [(decision, json.loads(request), self._labels(decision)) for decision, request in rows]
         for decision, request, labels in labeled:
             yield self._record(decision, request, labels)
+
+    def unresolved(self, limit: int) -> list[Record]:
+        """The newest `limit` decisions nobody reported an outcome for, as unlabeled records holding only the
+        questions a model can be trained to answer."""
+        with self._lock:
+            rows = self._db.execute("SELECT id, request FROM decisions WHERE id NOT IN (SELECT decision FROM outcomes) "
+                                    "ORDER BY rowid DESC LIMIT ?", (limit,)).fetchall()
+        records = []
+        for decision, request in rows:
+            request = json.loads(request)
+            questions = {qid: q for qid, q in request["questions"].items() if q["type"] in QUESTION_TYPES}
+            if questions:
+                records.append(Record(id=decision, state=request["state"], questions=questions))
+        return records
 
     def _labels(self, decision: str) -> dict:
         return {qid: json.loads(label) for qid, label in

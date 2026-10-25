@@ -471,7 +471,12 @@ or not, and a server serving `<adapters>/current` answers that version as
 `<name>:preview` beside it, on the same loaded base and at the preview's own
 calibration, whenever the two differ: send some traffic to it before trusting
 it. `--no-promote` keeps even a better version as the preview, for promotion
-by hand. `ruling promote v3 --adapters <adapters>` serves any trained version,
+by hand. `--replay N` also trains on up to N of the newest decisions nobody
+reported on, as the served version answered them, kept in the version's
+`replay.jsonl`: outcomes usually cover a few questions, and replay keeps the
+new version answering everything else as the served one did. Before the first
+step, every training run names the options its labels never or rarely (under
+10 times) choose, which it can barely learn. `ruling promote v3 --adapters <adapters>` serves any trained version,
 an older one included, which is how to roll back; restart the server
 afterward. The history page names both. Each version is scored
 at its own fitted temperature, because training sharpens an adapter faster

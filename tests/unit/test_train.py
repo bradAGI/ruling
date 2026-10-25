@@ -244,3 +244,14 @@ def test_examples_longer_than_max_tokens_are_dropped_and_counted():
     stub._tokens = lambda *args: Trainer._tokens(stub, *args)
     # The longest example, state and question as the model reads them, is the limit that would keep them all.
     assert Trainer._fitting(stub, records, examples) == ([Example(0, "rain", 1.0)], 1, 20)
+
+
+def test_options_with_few_or_no_labels_are_named_before_training():
+    from ruling.train import Example, thin_options
+
+    records = [record(labels={"color": "red"}) for _ in range(12)] + [record(labels={"color": "blue"})] * 3
+    records.append(record(references={"color": {"target": {"red": 0.5, "blue": 0.5, "green": 0.0}}}))
+    examples = [Example(i, "color", 1.0) for i in range(len(records))]
+    assert thin_options(records, examples, few=10) == ["color: no labels for green; fewer than 10 for blue (4)"]
+    assert thin_options(records[:12], [Example(i, "color", 1.0) for i in range(12)], few=1) == \
+        ["color: no labels for blue, green"]

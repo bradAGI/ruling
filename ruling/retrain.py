@@ -30,6 +30,7 @@ import mlx.core as mx
 
 from ruling.calibration import Calibration, Provenance
 from ruling.config import Settings
+from ruling.distill import answer_locally
 from ruling.engine import ADAPTER_CONFIG, ADAPTER_WEIGHTS
 from ruling.evals import Observation, Record, collect, decision_blocks, fit, load_dataset, target_of
 from ruling.ledger import DecisionLedger
@@ -40,6 +41,7 @@ from ruling.train import TRAINING, Trainer, TrainConfig, _state_key
 REPORT = "retrain.json"
 CALIBRATION = CALIBRATION_FILE
 DECISIONS = "decisions.jsonl"
+REPLAY = "replay.jsonl"
 VERSION = re.compile(r"v(\d+)")
 SIGNIFICANCE = 0.05
 """How unlikely by chance a question's losses must be before the candidate counts as worse on it."""
@@ -123,9 +125,14 @@ def trainable(records: list[Record], held_out: list[Record]) -> tuple[list[Recor
 
 
 def retrain(ledger: DecisionLedger, adapters: Path, model: str, holdout: list[Path], settings: Settings,
-            min_records: int, train_options: dict, log=print, auto_promote: bool = True) -> dict | None:
+            min_records: int, train_options: dict, log=print, auto_promote: bool = True,
+            replay: int = 0) -> dict | None:
     """One retraining run; returns its report, or None when too few decisions have outcomes yet. The new version
-    becomes the preview either way; it becomes current when it is better and `auto_promote` is on."""
+    becomes the preview either way; it becomes current when it is better and `auto_promote` is on.
+
+    With `replay`, up to that many of the newest decisions without outcomes are answered by the served version and
+    trained on as soft targets beside the outcomes, so learning the corrected questions does not move the model
+    away from what it already answered well."""
     held_out = [r for path in holdout for r in load_dataset(path)]
     records, dropped = trainable(list(ledger.records()), held_out)
     if dropped:
@@ -138,15 +145,25 @@ def retrain(ledger: DecisionLedger, adapters: Path, model: str, holdout: list[Pa
     start = current.resolve() if current.exists() else None
     version = next_version(adapters)
     version.mkdir(parents=True)
-    data = version / DECISIONS
-    data.write_text("".join(r.model_dump_json(exclude_none=True) + "\n" for r in records))
-    Trainer(TrainConfig(model=model, data=[data], output=version, holdout=holdout, from_adapter=start,
+    data = [version / DECISIONS]
+    _write(data[0], records)
+    replayed = []
+    if replay:
+        pool, _ = trainable(ledger.unresolved(replay), held_out)
+        served = _served(settings, model, start)
+        replayed = list(answer_locally(pool, served, log))
+        # Only one copy of the model may be held at a time: the trainer loads its own next.
+        del served
+        mx.clear_cache()
+        data.append(version / REPLAY)
+        _write(data[1], replayed)
+        log(f"replaying {len(replayed)} unresolved decisions as the served version answered them")
+    Trainer(TrainConfig(model=model, data=data, output=version, holdout=holdout, from_adapter=start,
                         max_image_tokens=settings.max_image_tokens, **_lora_layout(start), **train_options)).run(log)
     # The trainer's copy of the model is unreachable now; return its memory before loading the scorer's.
     mx.clear_cache()
 
-    served = build_engine(replace(settings, model=model, adapter_path=start, calibration_path=None, cascade_to=None,
-                                  failover_to=None))
+    served = _served(settings, model, start)
     candidate = served.variant(version, Calibration())
     observed = {name: collect(engine, held_out) for name, engine in (("current", served), ("candidate", candidate))}
     scored = {name: score(observations, engine.provenance)
@@ -160,6 +177,7 @@ def retrain(ledger: DecisionLedger, adapters: Path, model: str, holdout: list[Pa
     if better and not auto_promote:
         reason += f"; held as the preview: `ruling promote {version.name}` serves it"
     report = {"version": version.name, "started_from": start.name if start else None, "records": len(records),
+              "replayed": len(replayed),
               "dropped_held_out": dropped, "holdout": [str(p) for p in holdout], **scores, "worse": worse,
               "better": better, "promoted": promoted, "reason": reason}
     (version / REPORT).write_text(json.dumps(report, indent=2) + "\n")
@@ -190,6 +208,16 @@ def _report(version: Path) -> dict:
     if (version / TRAINING).exists():
         report["training"] = json.loads((version / TRAINING).read_text())["history"]
     return report
+
+
+def _served(settings: Settings, model: str, adapter: Path | None):
+    """The version being served, uncalibrated and alone: no cascade or failover partner answers for it."""
+    return build_engine(replace(settings, model=model, adapter_path=adapter, calibration_path=None, cascade_to=None,
+                                failover_to=None))
+
+
+def _write(path: Path, records: list[Record]) -> None:
+    path.write_text("".join(r.model_dump_json(exclude_none=True) + "\n" for r in records))
 
 
 def _lora_layout(adapter: Path | None) -> dict:

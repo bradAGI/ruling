@@ -98,6 +98,32 @@ class Example:
     """The record's weight: its share of a batch's update relative to the other rows."""
 
 
+FEW_LABELS = 10
+"""An option with fewer training labels than this is named before training: the model can barely learn it."""
+
+
+def thin_options(records: list[Record], examples: list[Example], few: int = FEW_LABELS) -> list[str]:
+    """One line per question with options that no label, or fewer than `few`, gives any probability."""
+    counts: dict[str, dict[str, int]] = {}
+    for example in examples:
+        record = records[example.record]
+        tally = counts.setdefault(example.question_id, {})
+        for key in option_keys(record.questions[example.question_id]):
+            tally.setdefault(key, 0)
+        for key, probability in target_vector(record, example.question_id).items():
+            tally[key] += probability > 0
+    lines = []
+    for qid, tally in counts.items():
+        parts = []
+        if missing := [k for k, n in tally.items() if n == 0]:
+            parts.append(f"no labels for {', '.join(missing)}")
+        if scarce := [f"{k} ({n})" for k, n in tally.items() if 0 < n < few]:
+            parts.append(f"fewer than {few} for {', '.join(scarce)}")
+        if parts:
+            lines.append(f"{qid}: {'; '.join(parts)}")
+    return lines
+
+
 def target_vector(record: Record, question_id: str) -> dict[str, float] | None:
     """The training target over canonical keys: a soft `target` reference, else the hard label."""
     soft = record.references.get(question_id, {}).get(TARGET)
@@ -492,6 +518,8 @@ class Trainer:
         log(f"trainable parameters {trainable:,}; {len(self.train_examples):,} train and {len(self.valid_examples):,} validation examples")
         if any(self.dropped.values()):
             log(f"dropped: {self._dropped_note()}")
+        for line in thin_options(self.train_records, self.train_examples):
+            log(f"warning: {line}")
 
         def record(entry: dict) -> None:
             history.append(entry)

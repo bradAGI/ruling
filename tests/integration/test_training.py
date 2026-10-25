@@ -211,3 +211,15 @@ def test_a_run_whose_examples_all_exceed_max_tokens_refuses_to_start(small_data,
     config, _ = _small_run(test_model, small_data, tmp_path / "short", max_tokens=8)
     with pytest.raises(ValueError, match=r"longer than max_tokens 8.*--max-tokens \d+ keeps them all"):
         Trainer(config)
+
+
+def test_a_run_names_its_thinly_labeled_options_before_the_first_step(small_data, test_model, tmp_path):
+    from ruling.train import thin_options
+
+    config, _ = _small_run(test_model, small_data, tmp_path / "thin", steps=1, eval_every=1)
+    trainer = Trainer(config)
+    expected = thin_options(trainer.train_records, trainer.train_examples)
+    said = []
+    trainer.run(log=said.append)
+    assert expected, "60 generated states should leave some option with under 10 labels"
+    assert [line for line in said if line.startswith("warning: ")] == [f"warning: {line}" for line in expected]
