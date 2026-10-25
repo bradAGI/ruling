@@ -162,6 +162,9 @@ def main(argv: list[str] | None = None) -> None:
     again.add_argument("--replay", type=int, default=0, metavar="N",
                        help="also train on up to N of the newest decisions without outcomes, as the served version "
                             "answered them, so the new version stays close to it elsewhere")
+    again.add_argument("--wandb", nargs="?", const="", metavar="PROJECT",
+                       help="mirror the training curve to a Weights & Biases run, in PROJECT or the account's default "
+                            "(needs `pip install 'ruling[wandb]'`)")
     again.add_argument("--promote", action=argparse.BooleanOptionalAction, default=True,
                        help="serve a better version at once; --no-promote holds it as the preview for `ruling promote`")
 
@@ -284,10 +287,14 @@ def main(argv: list[str] | None = None) -> None:
         from ruling.ledger import DecisionLedger
         from ruling.retrain import retrain
         settings = Settings.from_env()
+        if args.wandb is not None:
+            # Checked before any decision is read or model loaded, so a missing package is reported at once.
+            from ruling.train import require_wandb
+            require_wandb()
         options = {name.replace("-", "_"): getattr(args, name.replace("-", "_")) for name, _ in RETRAIN_OPTIONS}
         retrain(DecisionLedger(args.ledger), args.adapters, args.model or settings.model, args.holdout, settings,
                 args.min_records, {k: v for k, v in options.items() if v is not None}, auto_promote=args.promote,
-                replay=args.replay)
+                replay=args.replay, wandb=args.wandb)
         return
     if args.command == "promote":
         from ruling.retrain import promote_version

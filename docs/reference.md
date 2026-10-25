@@ -492,7 +492,8 @@ validation-loss curve and final train and validation loss. Until
 `--model` picks the base, defaulting to `RULING_MODEL`. `--steps`,
 `--learning-rate`, `--batch-size`, `--warmup`, `--eval-every`,
 `--valid-fraction` and `--seed` reach the trainer; the LoRA layout always
-follows the version it starts from.
+follows the version it starts from. `--wandb [PROJECT]` mirrors the run's
+training curve to Weights & Biases, as it does for `train`.
 
 ### train-encoder
 

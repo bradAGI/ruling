@@ -18,6 +18,7 @@ comparison in its version directory, promoted or not.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import math
 import os
@@ -36,7 +37,7 @@ from ruling.evals import Observation, Record, collect, decision_blocks, fit, loa
 from ruling.ledger import DecisionLedger
 from ruling.metrics import credit
 from ruling.registry import CALIBRATION_FILE, CURRENT, PREVIEW, build_engine
-from ruling.train import TRAINING, Trainer, TrainConfig, _state_key
+from ruling.train import TRAINING, Trainer, TrainConfig, WandbSink, _state_key
 
 REPORT = "retrain.json"
 CALIBRATION = CALIBRATION_FILE
@@ -126,13 +127,14 @@ def trainable(records: list[Record], held_out: list[Record]) -> tuple[list[Recor
 
 def retrain(ledger: DecisionLedger, adapters: Path, model: str, holdout: list[Path], settings: Settings,
             min_records: int, train_options: dict, log=print, auto_promote: bool = True,
-            replay: int = 0) -> dict | None:
+            replay: int = 0, wandb: str | None = None) -> dict | None:
     """One retraining run; returns its report, or None when too few decisions have outcomes yet. The new version
     becomes the preview either way; it becomes current when it is better and `auto_promote` is on.
 
     With `replay`, up to that many of the newest decisions without outcomes are answered by the served version and
     trained on as soft targets beside the outcomes, so learning the corrected questions does not move the model
-    away from what it already answered well."""
+    away from what it already answered well. With `wandb` (a project, or "" for the account's default), the
+    training curve is mirrored to a Weights & Biases run."""
     held_out = [r for path in holdout for r in load_dataset(path)]
     records, dropped = trainable(list(ledger.records()), held_out)
     if dropped:
@@ -158,8 +160,10 @@ def retrain(ledger: DecisionLedger, adapters: Path, model: str, holdout: list[Pa
         data.append(version / REPLAY)
         _write(data[1], replayed)
         log(f"replaying {len(replayed)} unresolved decisions as the served version answered them")
-    Trainer(TrainConfig(model=model, data=data, output=version, holdout=holdout, from_adapter=start,
-                        max_image_tokens=settings.max_image_tokens, **_lora_layout(start), **train_options)).run(log)
+    config = TrainConfig(model=model, data=data, output=version, holdout=holdout, from_adapter=start,
+                         max_image_tokens=settings.max_image_tokens, **_lora_layout(start), **train_options)
+    with contextlib.nullcontext() if wandb is None else WandbSink(wandb or None, config) as entries:
+        Trainer(config).run(log, entries)
     # The trainer's copy of the model is unreachable now; return its memory before loading the scorer's.
     mx.clear_cache()
 

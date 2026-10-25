@@ -215,16 +215,21 @@ def progress(step: int, steps: int, elapsed: float) -> dict:
     return {"elapsed_seconds": elapsed, "progress": step / steps, "eta_seconds": (steps - step) * elapsed / step}
 
 
+def require_wandb():
+    """The wandb package, or an error naming the extra that installs it."""
+    try:
+        import wandb
+    except ImportError as error:
+        raise ImportError("Weights & Biases logging needs the wandb package: pip install 'ruling[wandb]'") from error
+    return wandb
+
+
 class WandbSink:
     """Mirrors every history entry to a Weights & Biases run, opened on entering and finished on leaving,
     marked failed when training raised. The package is imported here only, so it stays optional."""
 
     def __init__(self, project: str | None, config: TrainConfig):
-        try:
-            import wandb
-        except ImportError as error:
-            raise ImportError("Weights & Biases logging needs the wandb package: pip install 'ruling[wandb]'") from error
-        self.wandb, self.project, self.config = wandb, project, config
+        self.wandb, self.project, self.config = require_wandb(), project, config
         self.run = None
 
     def __enter__(self) -> "WandbSink":

@@ -2,6 +2,7 @@
 promotes a new adapter only when it beats the served one on held-out data."""
 
 import json
+import sys
 from dataclasses import replace
 
 import pytest
@@ -72,8 +73,14 @@ def test_served_outcomes_train_a_version_that_is_promoted_only_if_better(engine,
 
     # Held back, a third version is only the preview; the server answers it by name beside the served one.
     before = (adapters / CURRENT).resolve().name if (adapters / CURRENT).exists() else None
-    main([*command, "--min-records", "20", "--no-promote", "--replay", "4"])
+    from tests.unit.test_train import FakeWandb
+
+    watched = FakeWandb()
+    monkeypatch.setitem(sys.modules, "wandb", watched)
+    main([*command, "--min-records", "20", "--no-promote", "--replay", "4", "--wandb", "tickets"])
     report = json.loads((adapters / "v3" / REPORT).read_text())
+    assert watched.init_calls[0]["project"] == "tickets" and watched.finished == [0]
+    assert [entry for _, entry in watched.logged] == history(adapters)["versions"][2]["training"]
     replayed = load_dataset(adapters / "v3" / "replay.jsonl")
     assert report["replayed"] == len(replayed) == 4
     assert sorted(json.dumps(r.state, sort_keys=True) for r in replayed) == \

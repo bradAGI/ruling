@@ -230,6 +230,16 @@ def test_wandb_sink_names_the_extra_to_install_when_the_package_is_missing(tmp_p
         WandbSink("tickets", _config(tmp_path))
 
 
+def test_retrain_with_wandb_names_the_missing_package_before_reading_the_ledger(tmp_path, monkeypatch):
+    from ruling.cli import main
+
+    monkeypatch.setitem(sys.modules, "wandb", None)
+    ledger = tmp_path / "ledger.sqlite"
+    with pytest.raises(ImportError, match=r"pip install 'ruling\[wandb\]'"):
+        main(["retrain", "--ledger", str(ledger), "--adapters", str(tmp_path / "adapters"), "--wandb"])
+    assert not ledger.exists()
+
+
 def test_examples_longer_than_max_tokens_are_dropped_and_counted():
     from types import SimpleNamespace
 
