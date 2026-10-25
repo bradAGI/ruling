@@ -143,7 +143,9 @@ def test_the_ask_tab_answers_in_words_and_opens_its_typed_questions_in_decide(pa
     page.select_option("#model", "text")      # waits for the picker to be filled from /v1/models
     page.click("#tab-ask")
     page.fill("#question", "can penguins fly")
-    with page.expect_response("**/v1/ask") as answered:
+    # Asking may write options with the model, which takes as long as the runner makes it; the suite's
+    # per-test timeout, not the browser's 30-second default, is what catches a hang.
+    with page.expect_response("**/v1/ask", timeout=0) as answered:
         page.click("#ask-run")
     body = answered.value.json()
     assert set(body["facts"]) == set(FACTS)
@@ -167,7 +169,7 @@ def test_the_ask_tab_sends_a_picked_picture_with_the_question(page: Page, served
     page.set_input_files("#ask-images", str(photo))
     page.wait_for_selector("#ask-thumbs .thumb")
     page.fill("#question", "what color is the square in the picture?")
-    with page.expect_request("**/v1/ask") as sent, page.expect_response("**/v1/ask") as answered:
+    with page.expect_request("**/v1/ask") as sent, page.expect_response("**/v1/ask", timeout=0) as answered:
         page.click("#ask-run")
     [image] = sent.value.post_data_json["images"]
     assert image["type"] == "image" and image["media_type"] == "image/png" and answered.value.status == 200
