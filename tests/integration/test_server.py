@@ -3,6 +3,7 @@ import shutil
 import subprocess
 from pathlib import Path
 
+import httpx
 import pytest
 from fastapi.testclient import TestClient
 
@@ -149,12 +150,13 @@ def test_typescript_sdk_reports_outcomes_and_opts_out_of_the_ledger(engine, tmp_
 import {{ RulingClient, noul }} from {json.dumps(TS_SDK.as_uri())};
 const client = new RulingClient({{ baseUrl: {json.dumps(url)} }});
 const questions = {{ refund: noul("The customer asks for a refund.") }};
-const logged = await client.systemOne({{ state: {json.dumps(PAYLOAD["state"])}, questions }});
+const logged = await client.systemOne({{ state: {json.dumps(PAYLOAD["state"])}, questions, idempotencyKey: "once" }});
+const retried = await client.systemOne({{ state: {json.dumps(PAYLOAD["state"])}, questions, idempotencyKey: "once" }});
 const stored = await client.outcome(logged.id, {{ refund: true }});
 const marked = await client.outcome(logged.id, undefined, {{ refund: {{ correct: false }} }});
 const batch = await client.outcomes([{{ id: logged.id, labels: {{ refund: true }} }}]);
 const excluded = await client.systemOne({{ state: "A benchmark row.", questions, excludeFromTraining: true }});
-console.log(JSON.stringify({{ stored, marked, batch, excludedId: excluded.id ?? null, logged: logged.id,
+console.log(JSON.stringify({{ stored, marked, batch, excludedId: excluded.id ?? null, logged: logged.id, retried: retried.id,
                               served: logged.answers.refund.noul >= 0.5 }}));
 """
     try:
@@ -165,6 +167,7 @@ console.log(JSON.stringify({{ stored, marked, batch, excludedId: excluded.id ?? 
         thread.join(timeout=10)
     assert result.returncode == 0, result.stderr
     out = json.loads(result.stdout.strip().splitlines()[-1])
+    assert out["retried"] == out["logged"]
     assert out["stored"] == {"refund": True} and out["excludedId"] is None
     assert out["batch"] == [{"id": out["logged"], "labels": {"refund": True}}]
     assert out["marked"] == {"refund": not out["served"]}
@@ -311,3 +314,36 @@ def test_drift_is_served_and_printed_from_the_ledger(engine, tmp_path, capsys):
     assert {(d["model"], d["question"]) for d in served} == {(engine.model_id, q) for q in PAYLOAD["questions"]}
     main(["drift", "--ledger", str(ledger), "--window", "3"])
     assert json.loads(capsys.readouterr().out)["drift"] == served
+
+
+class LosesFirstResponse(httpx.HTTPTransport):
+    """A network that delivers the first request to the server, then loses the response on the way back."""
+
+    def __init__(self):
+        super().__init__()
+        self.sent = 0
+
+    def handle_request(self, request):
+        response = super().handle_request(request)
+        self.sent += 1
+        if self.sent == 1:
+            response.read()
+            raise httpx.ReadTimeout("the response was lost", request=request)
+        return response
+
+
+def test_a_retry_after_a_lost_response_is_answered_with_the_decision_already_logged(engine, tmp_path):
+    from ruling.sdk import RetryPolicy
+
+    ledger = tmp_path / "ledger.sqlite"
+    server, thread, url = _serve(create_app(Registry.single(engine), None, 4, DecisionLedger(ledger)))
+    network = LosesFirstResponse()
+    try:
+        with RulingClient(base_url=url, transport=network, retry=RetryPolicy(backoff_initial=0.01)) as client:
+            decision = client.system_one(state=PAYLOAD["state"], questions={
+                "refund": Noul(instructions="The customer asks for a refund.")})
+    finally:
+        server.should_exit = True
+        thread.join(timeout=10)
+    assert network.sent == 2
+    assert DecisionLedger(ledger).ids() == [decision.id]

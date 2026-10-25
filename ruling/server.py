@@ -37,7 +37,7 @@ from ruling.engine import InputTooLong, extended_context
 from ruling.evals import Record, as_record, collect, predict, report
 from ruling.hosted import LONG_CONTEXT_HEADER, HostUnavailable
 from ruling.drift import WINDOW, drift
-from ruling.ledger import DecisionLedger, Outcome, OutcomeBatch, OutcomeRefused, UnknownDecision
+from ruling.ledger import IDEMPOTENCY_HEADER, DecisionLedger, Outcome, OutcomeBatch, OutcomeRefused, UnknownDecision
 from ruling.questions import (
     MAX_PREDICT_ROWS,
     InvalidOptions,
@@ -361,6 +361,10 @@ def create_app(registry: Registry, api_key: str | None, max_pending: int,
             check_readable(request.state, engine.reads_images)
         except UnsupportedModality as exc:
             raise ApiError(422, "unsupported_modality", f"{name}: {exc}", "state") from exc
+        logged = ledger is not None and not request.exclude_from_training
+        key = http.headers.get(IDEMPOTENCY_HEADER) if logged else None
+        if key is not None and (replayed := await run_in_threadpool(ledger.replay, key)) is not None:
+            return replayed
         with admission.slot() as elapsed, engine_errors():
             if asked_for_long_context(http):
                 with extended_context():
@@ -374,8 +378,8 @@ def create_app(registry: Registry, api_key: str | None, max_pending: int,
         # failover changes to say which side answered.
         if name != registry.default:
             response = response.model_copy(update={"model": name})
-        if ledger is not None and not request.exclude_from_training:
-            response = response.model_copy(update={"id": await run_in_threadpool(ledger.record, request, response)})
+        if logged:
+            response = response.model_copy(update={"id": await run_in_threadpool(ledger.record, request, response, key)})
         return response
 
     @app.post("/v1/ask", response_model=AskResponse, response_model_exclude_none=True, dependencies=[Depends(authorize)])

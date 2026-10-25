@@ -62,6 +62,8 @@ export class RulingClient {
     assets?: Record<string, ImageBlock>;
     /** Ask the server for its long-context limits, as the hosted API's danger-zone header does. */
     longContext?: boolean;
+    /** The same key on every retry of one decision, so a server with a ledger logs it once. */
+    idempotencyKey?: string;
   }): Promise<SystemOneResponse<Q>>;
   /** What was right for a logged decision: `labels` name it, `corrections` mark the served answers. */
   outcome(decisionId: string, labels?: Record<string, Label>,

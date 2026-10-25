@@ -134,3 +134,23 @@ def test_a_batch_of_outcomes_is_stored_whole_or_not_at_all(tmp_path):
                               (second, Outcome(corrections={"refund": wrong()}))])
     assert [r.labels for r in stored] == [{"team": "billing"}, {"refund": False}]
     assert {r.id for r in ledger.records()} == {first, second}
+
+
+def test_a_retried_request_with_the_same_key_is_one_decision_and_replays_it(tmp_path):
+    ledger = DecisionLedger(tmp_path / "ledger.sqlite")
+    assert ledger.replay("k1") is None
+    first = ledger.record(REQUEST, RESPONSE, "k1")
+    assert ledger.record(REQUEST, RESPONSE, "k1") == first        # a retry whose first try was logged after all
+    other = ledger.record(REQUEST, RESPONSE, "k2")
+    assert ledger.ids() == [first, other]
+    replayed = ledger.replay("k1")
+    assert replayed.id == first and replayed.answers == RESPONSE.answers
+
+
+def test_a_key_is_forgotten_with_the_decision_retention_drops(tmp_path):
+    clock = {"now": 1_000_000.0}
+    ledger = DecisionLedger(tmp_path / "ledger.sqlite", retain_seconds=60, now=lambda: clock["now"])
+    stale = ledger.record(REQUEST, RESPONSE, "k1")
+    clock["now"] += 61
+    fresh = ledger.record(REQUEST, RESPONSE, "k1")                 # the key now belongs to nothing still held
+    assert fresh != stale and ledger.ids() == [fresh] and ledger.replay("k1").id == fresh

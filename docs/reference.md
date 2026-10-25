@@ -437,6 +437,13 @@ with fewer than two windows of traffic is left out. Drift says the traffic
 changed, not that the answers are wrong: it is the cue to collect outcomes for
 that question and retrain.
 
+A request with an `Idempotency-Key` header is logged once however often it is
+sent: a repeat of a key the ledger holds is answered with the decision already
+logged, its `id` included, without asking the model again. The Python client
+sends a fresh key with every decision and keeps it across its own retries, so
+a retry after a lost response does not count the decision twice; the
+TypeScript client sends `idempotencyKey` when given one.
+
 A request with `"exclude_from_training": true`, meant for benchmark and
 evaluation traffic, is answered as usual but never logged, and its response
 has no `id`.

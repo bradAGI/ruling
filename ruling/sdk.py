@@ -6,6 +6,7 @@ import base64
 import gzip
 import json
 import os
+import uuid
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -15,7 +16,7 @@ import httpx
 from pydantic import TypeAdapter
 
 from ruling.ask import AskResponse
-from ruling.ledger import Outcome, OutcomeBatch
+from ruling.ledger import IDEMPOTENCY_HEADER, Outcome, OutcomeBatch
 from ruling.questions import (
     IMAGE_SUFFIXES,
     Answer,
@@ -118,7 +119,9 @@ class RulingClient:
         # Unset fields stay off the wire, so a body without the flag or assets is exactly System One's.
         body = request.model_dump(mode="json", exclude_none=True,
                                   exclude=None if exclude_from_training else {"exclude_from_training"})
-        return SystemOneResponse.model_validate(self._send("POST", "/v1/systemone", body).json())
+        # One key for every attempt, so a retry of a decision the server already logged is not logged twice.
+        key = {IDEMPOTENCY_HEADER: uuid.uuid4().hex}
+        return SystemOneResponse.model_validate(self._send("POST", "/v1/systemone", body, headers=key).json())
 
     def ask(self, text: str, model: str | None = None, images: list[dict] | None = None) -> AskResponse:
         """A question in plain words: the model's readings of it, each answer with what was said, and the work."""
@@ -158,8 +161,10 @@ class RulingClient:
     def models(self) -> list[ModelInfo]:
         return ModelList.model_validate(self._send("GET", "/v1/models").json()).models
 
-    def _send(self, method: str, path: str, body: dict | None = None, params: dict | None = None) -> httpx.Response:
-        content, headers = self._encode(body)
+    def _send(self, method: str, path: str, body: dict | None = None, params: dict | None = None,
+              headers: dict | None = None) -> httpx.Response:
+        content, encoded = self._encode(body)
+        headers = encoded | (headers or {})
         for attempt in range(self.retry.max_retries + 1):
             last = attempt == self.retry.max_retries
             try:

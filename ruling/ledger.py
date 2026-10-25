@@ -43,8 +43,15 @@ CREATE TABLE IF NOT EXISTS outcomes (
     reported REAL NOT NULL,
     PRIMARY KEY (decision, question)
 );
+CREATE TABLE IF NOT EXISTS idempotency (
+    key TEXT PRIMARY KEY,
+    decision TEXT NOT NULL REFERENCES decisions(id)
+);
 """
 
+
+IDEMPOTENCY_HEADER = "Idempotency-Key"
+"""A client's id for one decision, the same across its retries, so a retry is answered with the logged decision."""
 
 MAX_OUTCOMES = 1000
 """Outcomes one batch may carry; a batch is stored whole or not at all."""
@@ -114,21 +121,38 @@ class DecisionLedger:
         self._retain = retain_seconds
         self._now = now
 
-    def record(self, request: SystemOneRequest, response: SystemOneResponse) -> str:
-        """Store one answered request and return the id outcomes will refer to.
+    def record(self, request: SystemOneRequest, response: SystemOneResponse, key: str | None = None) -> str:
+        """Store one answered request and return the id outcomes will refer to. A request carrying the `key` of a
+        decision already held is a client's retry of it, and gets that decision's id instead of a second entry.
 
         With a retention, unresolved decisions older than it go first, so the ledger never
         outgrows the traffic of one retention period plus what has been resolved."""
-        decision = uuid.uuid4().hex
         now = self._now()
         with self._lock, self._db:
             if self._retain is not None:
                 self._db.execute("DELETE FROM decisions WHERE created < ? AND id NOT IN (SELECT decision FROM outcomes)",
                                  (now - self._retain,))
+                self._db.execute("DELETE FROM idempotency WHERE decision NOT IN (SELECT id FROM decisions)")
+            if key is not None:
+                held = self._db.execute("SELECT decision FROM idempotency WHERE key = ?", (key,)).fetchone()
+                if held is not None:
+                    return held[0]
+            decision = uuid.uuid4().hex
             self._db.execute("INSERT INTO decisions VALUES (?, ?, ?, ?, ?)",
                              (decision, now, response.model, request.model_dump_json(exclude_none=True),
                               response.model_dump_json(exclude_none=True)))
+            if key is not None:
+                self._db.execute("INSERT INTO idempotency VALUES (?, ?)", (key, decision))
         return decision
+
+    def replay(self, key: str) -> SystemOneResponse | None:
+        """The logged response, with its id, of the decision made under `key`; None when there is none."""
+        with self._lock:
+            row = self._db.execute("SELECT d.id, d.response FROM idempotency i JOIN decisions d ON d.id = i.decision "
+                                   "WHERE i.key = ?", (key,)).fetchone()
+        if row is None:
+            return None
+        return SystemOneResponse.model_validate_json(row[1]).model_copy(update={"id": row[0]})
 
     def ids(self) -> list[str]:
         """Every decision still held, oldest first."""
