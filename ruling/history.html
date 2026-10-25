@@ -75,7 +75,8 @@ fetch("/v1/retrain", { headers: key ? { authorization: `Bearer ${key}` } : {} })
   }
   let html = "";
   for (const m of data.models) {
-    html += `<h2>${text(m.name)} <span class="meta">serving ${text(m.current ?? "the base model")}</span></h2>`;
+    const preview = m.preview && m.preview !== m.current ? `, preview ${text(m.preview)} as ${text(m.name)}:preview` : "";
+    html += `<h2>${text(m.name)} <span class="meta">serving ${text(m.current ?? "the base model")}${preview}</span></h2>`;
     if (!m.versions.length) { html += '<div class="meta">no finished runs yet</div>'; continue; }
     html += '<div class="scroll"><table><thead><tr><th>version</th><th>from</th><th class="num">records</th>' +
             '<th class="num">held-out accuracy</th><th class="num">held-out log loss</th>' +

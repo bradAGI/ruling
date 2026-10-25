@@ -235,6 +235,7 @@ CUDA graphs; `--enforce-eager` avoids it, at some cost in speed.
 | `export-decisions` | write the served decisions that have outcomes as training records |
 | `drift` | whether each served question's recent answers moved away from the ones before, as JSON |
 | `retrain` | train on the ledger's resolved decisions and promote the result only if it beats the served adapter on held-out data |
+| `promote` | serve a trained version from a retrain directory; an older one rolls back |
 | `train-encoder` | fully fine-tune a decision encoder on training records |
 
 `serve` takes no flags; everything it needs is in [Settings](#settings).
@@ -454,7 +455,16 @@ accuracy is no worse, and no single question got worse; restart the server to
 serve it. A question counts as worse when, on the held-out rows the two
 versions answer differently, the new one loses more than chance allows (an
 exact sign test at 5%), so a gain on a busy question cannot hide a collapse on
-a rare one; the report lists them under `worse` and the verdict names them. Each version is scored
+a rare one; the report lists them under `worse` and the verdict names them.
+
+Every run also points `<adapters>/preview` at the version it trained, promoted
+or not, and a server serving `<adapters>/current` answers that version as
+`<name>:preview` beside it, on the same loaded base and at the preview's own
+calibration, whenever the two differ: send some traffic to it before trusting
+it. `--no-promote` keeps even a better version as the preview, for promotion
+by hand. `ruling promote v3 --adapters <adapters>` serves any trained version,
+an older one included, which is how to roll back; restart the server
+afterward. The history page names both. Each version is scored
 at its own fitted temperature, because training sharpens an adapter faster
 than it corrects it and a version that is right more often must not lose for
 being overconfident. The candidate's temperatures are saved beside its weights

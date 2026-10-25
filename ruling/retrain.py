@@ -30,16 +30,15 @@ import mlx.core as mx
 
 from ruling.calibration import Calibration, Provenance
 from ruling.config import Settings
-from ruling.engine import ADAPTER_CONFIG
+from ruling.engine import ADAPTER_CONFIG, ADAPTER_WEIGHTS
 from ruling.evals import Observation, Record, collect, decision_blocks, fit, load_dataset, target_of
 from ruling.ledger import DecisionLedger
 from ruling.metrics import credit
-from ruling.registry import build_engine
+from ruling.registry import CALIBRATION_FILE, CURRENT, PREVIEW, build_engine
 from ruling.train import TRAINING, Trainer, TrainConfig, _state_key
 
-CURRENT = "current"
 REPORT = "retrain.json"
-CALIBRATION = "calibration.json"
+CALIBRATION = CALIBRATION_FILE
 DECISIONS = "decisions.jsonl"
 VERSION = re.compile(r"v(\d+)")
 SIGNIFICANCE = 0.05
@@ -93,12 +92,27 @@ def next_version(adapters: Path) -> Path:
     return adapters / f"v{max(numbers, default=0) + 1}"
 
 
-def promote(adapters: Path, version: Path) -> None:
-    """Point `current` at `version` in one rename, so a server starting meanwhile sees the old or the new, never neither."""
-    staged = adapters / f".{CURRENT}.next"
+def point(adapters: Path, link: str, version: Path) -> None:
+    """Point `link` at `version` in one rename, so a server starting meanwhile sees the old or the new, never neither."""
+    staged = adapters / f".{link}.next"
     staged.unlink(missing_ok=True)
     staged.symlink_to(version.name)
-    os.replace(staged, adapters / CURRENT)
+    os.replace(staged, adapters / link)
+
+
+def promote(adapters: Path, version: Path) -> None:
+    point(adapters, CURRENT, version)
+
+
+def promote_version(adapters: Path, name: str) -> Path:
+    """Serve the trained version `name` (a rollback when it is older), refusing anything that is not one."""
+    version = adapters / name
+    if not VERSION.fullmatch(name) or not (version / ADAPTER_WEIGHTS).exists():
+        trained = sorted((p.name for p in adapters.iterdir() if VERSION.fullmatch(p.name) and (p / ADAPTER_WEIGHTS).exists()),
+                         key=lambda n: int(n[1:])) if adapters.exists() else []
+        raise ValueError(f"{name!r} is not a trained version in {adapters}; trained: {', '.join(trained) or 'none'}")
+    promote(adapters, version)
+    return version
 
 
 def trainable(records: list[Record], held_out: list[Record]) -> tuple[list[Record], int]:
@@ -109,8 +123,9 @@ def trainable(records: list[Record], held_out: list[Record]) -> tuple[list[Recor
 
 
 def retrain(ledger: DecisionLedger, adapters: Path, model: str, holdout: list[Path], settings: Settings,
-            min_records: int, train_options: dict, log=print) -> dict | None:
-    """One retraining run; returns its report, or None when too few decisions have outcomes yet."""
+            min_records: int, train_options: dict, log=print, auto_promote: bool = True) -> dict | None:
+    """One retraining run; returns its report, or None when too few decisions have outcomes yet. The new version
+    becomes the preview either way; it becomes current when it is better and `auto_promote` is on."""
     held_out = [r for path in holdout for r in load_dataset(path)]
     records, dropped = trainable(list(ledger.records()), held_out)
     if dropped:
@@ -140,11 +155,15 @@ def retrain(ledger: DecisionLedger, adapters: Path, model: str, holdout: list[Pa
     scores = {name: {**metrics, "temperatures": calibration.temperatures}
               for name, (metrics, calibration) in scored.items()}
     worse = worse_questions(observed["current"], observed["candidate"])
-    promoted, reason = should_promote(scores["current"], scores["candidate"], worse)
+    better, reason = should_promote(scores["current"], scores["candidate"], worse)
+    promoted = better and auto_promote
+    if better and not auto_promote:
+        reason += f"; held as the preview: `ruling promote {version.name}` serves it"
     report = {"version": version.name, "started_from": start.name if start else None, "records": len(records),
               "dropped_held_out": dropped, "holdout": [str(p) for p in holdout], **scores, "worse": worse,
-              "promoted": promoted, "reason": reason}
+              "better": better, "promoted": promoted, "reason": reason}
     (version / REPORT).write_text(json.dumps(report, indent=2) + "\n")
+    point(adapters, PREVIEW, version)
     if promoted:
         promote(adapters, version)
     log(f"{version.name}: {'promoted' if promoted else 'kept ' + (start.name if start else 'the base model')}; {reason}")
@@ -152,16 +171,17 @@ def retrain(ledger: DecisionLedger, adapters: Path, model: str, holdout: list[Pa
 
 
 def history(adapters: Path) -> dict:
-    """Every finished run's report in version order, each with its training curve, and the version `current`
-    points at.
+    """Every finished run's report in version order, each with its training curve, and the versions `current`
+    and `preview` point at.
 
     A version still training, or one whose run failed, has no report and is left out."""
-    link = adapters / CURRENT
+    links = {name: adapters / name for name in (CURRENT, PREVIEW)}
     reports = [_report(version)
                for version in sorted((p for p in adapters.iterdir() if VERSION.fullmatch(p.name)),
                                      key=lambda p: int(p.name[1:]))
                if (version / REPORT).exists()] if adapters.exists() else []
-    return {"current": link.resolve().name if link.exists() else None, "versions": reports}
+    return {**{name: link.resolve().name if link.exists() else None for name, link in links.items()},
+            "versions": reports}
 
 
 def _report(version: Path) -> dict:

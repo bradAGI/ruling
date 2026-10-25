@@ -233,7 +233,7 @@ def test_retraining_history_covers_only_retrain_adapters_and_needs_the_key(tmp_p
         refused = client.get("/v1/retrain")
         listed = client.get("/v1/retrain", headers={"authorization": "Bearer k"}).json()
     assert refused.status_code == 401
-    assert listed == {"models": [{"name": "tuned", "current": "v1", "versions": [{"version": "v1", "promoted": True}]}]}
+    assert listed == {"models": [{"name": "tuned", "current": "v1", "preview": None, "versions": [{"version": "v1", "promoted": True}]}]}
 
 
 class SightedEngine(FakeEngine):

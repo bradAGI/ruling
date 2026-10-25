@@ -14,7 +14,7 @@ from ruling.cli import main
 from ruling.config import Settings
 from ruling.ledger import DecisionLedger
 from ruling.registry import Registry, build_engine
-from ruling.retrain import CALIBRATION, CURRENT, REPORT, history, should_promote
+from ruling.retrain import CALIBRATION, CURRENT, PREVIEW, REPORT, history, should_promote
 from ruling.server import create_app
 
 from .conftest import TEST_MODEL
@@ -62,3 +62,19 @@ def test_served_outcomes_train_a_version_that_is_promoted_only_if_better(engine,
         assert serving.calibration.temperatures == calibration.temperatures
         # The history page reads each version's own training log, finished at the last step.
         assert history(adapters)["versions"][run]["training"][-1]["progress"] == 1.0
+        assert (adapters / PREVIEW).resolve().name == version
+
+    # Held back, a third version is only the preview; the server answers it by name beside the served one.
+    before = (adapters / CURRENT).resolve().name if (adapters / CURRENT).exists() else None
+    main([*command, "--min-records", "20", "--no-promote"])
+    report = json.loads((adapters / "v3" / REPORT).read_text())
+    assert not report["promoted"] and (adapters / PREVIEW).resolve().name == "v3"
+    assert ((adapters / CURRENT).resolve().name if (adapters / CURRENT).exists() else None) == before
+    main(["promote", "--adapters", str(adapters), "v1"])
+    registry = Registry.from_settings(replace(Settings.from_env(), model=TEST_MODEL, adapter_path=adapters / CURRENT))
+    preview = registry.resolve(f"{registry.default}:preview")[1]
+    assert preview.adapter_path.resolve() == (adapters / "v3").resolve()
+    with TestClient(create_app(registry, None, 4)) as client:
+        asked = {"state": served[0].state, "model": f"{registry.default}:preview",
+                 "questions": {qid: q.model_dump(exclude_none=True) for qid, q in served[0].questions.items()}}
+        assert client.post("/v1/systemone", json=asked).status_code == 200

@@ -4,11 +4,12 @@ import itertools
 import json
 
 import numpy as np
+import pytest
 
 from ruling.calibration import Calibration, Provenance
 from ruling.evals import Observation, Record, decision_blocks
-from ruling.retrain import (CURRENT, REPORT, history, next_version, promote, score, should_promote, trainable,
-                            worse_questions)
+from ruling.retrain import (CURRENT, PREVIEW, REPORT, history, next_version, point, promote, promote_version, score,
+                            should_promote, trainable, worse_questions)
 
 QUESTION = {"q": {"type": "noul", "instructions": "It is about money."}}
 
@@ -118,7 +119,7 @@ def test_history_lists_finished_versions_in_number_order_and_names_the_served_on
     listed = history(tmp_path)
     assert listed["current"] == "v2"
     assert [v["version"] for v in listed["versions"]] == ["v1", "v2", "v10"]
-    assert history(tmp_path / "missing") == {"current": None, "versions": []}
+    assert history(tmp_path / "missing") == {"current": None, "preview": None, "versions": []}
 
 
 def test_history_carries_each_versions_training_curve_when_its_log_exists(tmp_path):
@@ -133,3 +134,36 @@ def test_history_carries_each_versions_training_curve_when_its_log_exists(tmp_pa
     first, second = history(tmp_path)["versions"]
     assert first["training"] == curve
     assert "training" not in second
+
+
+def adapter_version(adapters, name):
+    from ruling.engine import ADAPTER_WEIGHTS
+
+    version = adapters / name
+    version.mkdir(parents=True)
+    (version / ADAPTER_WEIGHTS).write_bytes(b"")
+    return version
+
+
+def test_promoting_by_hand_serves_any_trained_version_including_an_older_one(tmp_path):
+    for name in ("v1", "v2"):
+        adapter_version(tmp_path, name)
+    (tmp_path / "v3").mkdir()                         # a run that failed before saving weights
+    promote_version(tmp_path, "v2")
+    promote_version(tmp_path, "v1")                   # a rollback is a promotion of an older version
+    assert (tmp_path / CURRENT).resolve().name == "v1"
+    for missing in ("v3", "v9", "current", "../v1"):
+        with pytest.raises(ValueError):
+            promote_version(tmp_path, missing)
+    assert (tmp_path / CURRENT).resolve().name == "v1"
+
+
+def test_preview_and_current_are_separate_links_and_history_names_both(tmp_path):
+    for number in (1, 2):
+        adapter_version(tmp_path, f"v{number}")
+        (tmp_path / f"v{number}" / REPORT).write_text(json.dumps({"version": f"v{number}", "promoted": number == 1}))
+    promote(tmp_path, tmp_path / "v1")
+    point(tmp_path, PREVIEW, tmp_path / "v2")
+    assert (tmp_path / CURRENT).resolve().name == "v1" and str((tmp_path / PREVIEW).readlink()) == "v2"
+    listed = history(tmp_path)
+    assert (listed["current"], listed["preview"]) == ("v1", "v2")

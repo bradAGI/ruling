@@ -24,7 +24,7 @@ from ruling.engine import Engine
 from ruling.evals import collect, fit, load_dataset, predict, report, write_json, write_predictions
 from ruling.questions import Box, Choice, Noul, Score, SystemOneRequest
 from ruling.hosted import OpenRouterEngine
-from ruling.registry import build_engine
+from ruling.registry import CURRENT, build_engine
 from ruling.server import app_from_env
 
 
@@ -159,6 +159,13 @@ def main(argv: list[str] | None = None) -> None:
                        help="do nothing until this many decisions have outcomes")
     for name, kind in RETRAIN_OPTIONS:
         again.add_argument(f"--{name}", type=kind)
+    again.add_argument("--promote", action=argparse.BooleanOptionalAction, default=True,
+                       help="serve a better version at once; --no-promote holds it as the preview for `ruling promote`")
+
+    promoted = commands.add_parser("promote", help="serve a trained version from a retrain directory; an older "
+                                                   "one rolls back")
+    promoted.add_argument("version", help="the version to serve, such as v3")
+    promoted.add_argument("--adapters", type=Path, required=True, help="the directory `ruling retrain` writes")
 
     encoder = commands.add_parser("train-encoder", help="fully fine-tune a decision encoder on training records")
     encoder.add_argument("--data", type=Path, nargs="+", required=True)
@@ -276,7 +283,12 @@ def main(argv: list[str] | None = None) -> None:
         settings = Settings.from_env()
         options = {name.replace("-", "_"): getattr(args, name.replace("-", "_")) for name, _ in RETRAIN_OPTIONS}
         retrain(DecisionLedger(args.ledger), args.adapters, args.model or settings.model, args.holdout, settings,
-                args.min_records, {k: v for k, v in options.items() if v is not None})
+                args.min_records, {k: v for k, v in options.items() if v is not None}, auto_promote=args.promote)
+        return
+    if args.command == "promote":
+        from ruling.retrain import promote_version
+        version = promote_version(args.adapters, args.version)
+        print(f"{args.adapters / CURRENT} -> {version.name}; restart the server to serve it")
         return
     if args.command == "export-adapter":
         from ruling.peft import export_adapter

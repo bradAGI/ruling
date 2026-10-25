@@ -33,6 +33,12 @@ from ruling.questions import DEFAULT_MODEL_ALIASES, ModelInfo
 from ruling.vision import VISION_PREFIX
 
 ENTRY_FIELDS = ("model", "adapter", "calibration", "base_url")
+CURRENT = "current"
+"""In a `ruling retrain` adapters directory, the link to the version being served."""
+PREVIEW = "preview"
+"""In a `ruling retrain` adapters directory, the link to the newest trained version, promoted or not."""
+PREVIEW_SUFFIX = ":preview"
+CALIBRATION_FILE = "calibration.json"
 REMOTE_PREFIXES = (TYPESAFE_PREFIX, VLLM_PREFIX, HOSTED_PREFIX)
 
 
@@ -156,7 +162,7 @@ class Registry:
                 if name in engines:
                     raise ValueError(f"model {name!r} is both the primary model and an entry in {settings.models_path}")
                 engines[name] = _build_entry(entry, settings, engines)
-        return cls(primary.model_id, engines)
+        return cls(primary.model_id, with_previews(engines))
 
     def resolve(self, name: str | None) -> tuple[str, object]:
         """The entry name and engine a request's `model` field selects; None and the aliases mean the default."""
@@ -195,3 +201,21 @@ def _build_entry(entry: Entry, settings: Settings, loaded: dict[str, object]):
                if entry.base_url else {})
     return build_engine(replace(settings, model=entry.model, adapter_path=entry.adapter,
                                 calibration_path=entry.calibration, cascade_to=None, failover_to=None, **address))
+
+
+def with_previews(engines: dict[str, object]) -> dict[str, object]:
+    """The engines, plus `<name>:preview` for each one serving a retrain directory's `current` whose `preview` is
+    another version: the candidate answers beside the served version on the same loaded base, at its own fitted
+    calibration, so it can be tried on live traffic before it is promoted."""
+    previews = {}
+    for name, engine in engines.items():
+        adapter = getattr(engine, "adapter_path", None)
+        if adapter is None or adapter.name != CURRENT:
+            continue
+        preview = adapter.parent / PREVIEW
+        if not preview.exists() or preview.resolve() == adapter.resolve():
+            continue
+        calibration = preview / CALIBRATION_FILE
+        previews[name + PREVIEW_SUFFIX] = engine.variant(
+            preview, Calibration.load(calibration) if calibration.exists() else Calibration())
+    return engines | previews

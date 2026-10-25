@@ -113,3 +113,39 @@ def test_settings_read_the_ledger_retention_in_days(monkeypatch):
     assert Settings.from_env().ledger_retain_days == 30
     monkeypatch.delenv("RULING_LEDGER_RETAIN_DAYS")
     assert Settings.from_env().ledger_retain_days is None
+
+
+class AdaptedEngine(FakeEngine):
+    """An engine serving an adapter, whose variants record what they were made from."""
+
+    def __init__(self, model_id, adapter_path):
+        super().__init__(model_id)
+        self.adapter_path = adapter_path
+
+    def variant(self, adapter, calibration):
+        made = AdaptedEngine(self.model_id, adapter)
+        made.calibration = calibration
+        return made
+
+
+def test_a_served_current_adapter_brings_its_preview_under_its_own_name(tmp_path):
+    from ruling.registry import CURRENT, PREVIEW, with_previews
+
+    for name in ("v1", "v2"):
+        (tmp_path / name).mkdir()
+    (tmp_path / CURRENT).symlink_to("v1")
+    (tmp_path / PREVIEW).symlink_to("v2")
+    from ruling.calibration import Provenance
+
+    Calibration(temperatures={"noul": 2.0}, provenance=Provenance("base", None, 1, False)).save(
+        tmp_path / "v2" / "calibration.json")
+    engines = with_previews({"tickets": AdaptedEngine("base", tmp_path / CURRENT), "plain": FakeEngine("base"),
+                             "pinned": AdaptedEngine("base", tmp_path / "v1")})
+    assert sorted(engines) == ["pinned", "plain", "tickets", "tickets:preview"]
+    preview = engines["tickets:preview"]
+    assert preview.adapter_path.resolve() == (tmp_path / "v2").resolve()
+    assert preview.calibration.temperatures == {"noul": 2.0}
+    # A preview that is already current, or no preview at all, adds nothing.
+    (tmp_path / PREVIEW).unlink()
+    (tmp_path / PREVIEW).symlink_to("v1")
+    assert sorted(with_previews({"tickets": AdaptedEngine("base", tmp_path / CURRENT)})) == ["tickets"]

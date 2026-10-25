@@ -50,8 +50,8 @@ from ruling.questions import (
     check_readable,
     resolve_assets,
 )
-from ruling.registry import Registry, UnknownModel
-from ruling.retrain import CURRENT, history
+from ruling.registry import CURRENT, Registry, UnknownModel
+from ruling.retrain import history
 from ruling.usage import Metered, UsageMeter
 
 log = logging.getLogger("ruling")
