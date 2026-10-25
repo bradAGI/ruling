@@ -19,7 +19,8 @@ PROBABILITY_FLOOR = 1e-12
 def decision_metrics(probs: list[np.ndarray], targets: list[np.ndarray], bins: int = 10) -> dict:
     """Pooled metrics over paired distributions and targets; `{"n": 0}` for empty input.
 
-    - accuracy: argmax(p) equals argmax(y)
+    - accuracy: argmax(p) equals argmax(y); when k options tie for p's top, each counts 1/k, so a decision
+      scores |top(p) ∩ top(y)| / k and no metric depends on the order the options are listed in
     - nll: −Σ y log p, averaged
     - brier: Σ (p − y)², averaged
     - ece: expected calibration error over `bins` equal-width bins on top-1 confidence
@@ -36,9 +37,9 @@ def decision_metrics(probs: list[np.ndarray], targets: list[np.ndarray], bins: i
         p, y = np.asarray(p, dtype=np.float64), np.asarray(y, dtype=np.float64)
         if p.shape != y.shape:
             raise ValueError(f"decision {i}: probabilities have {p.size} entries, target has {y.size}")
-        predicted = int(p.argmax())
-        confidence[i] = p[predicted]
-        correct[i] = predicted == int(y.argmax())
+        predicted = np.flatnonzero(p == p.max())
+        confidence[i] = p.max()
+        correct[i] = np.isin(predicted, np.flatnonzero(y == y.max())).mean()
         nll[i] = -(y * np.log(np.maximum(p, PROBABILITY_FLOOR))).sum()
         brier[i] = ((p - y) ** 2).sum()
     ece = 0.0
