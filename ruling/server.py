@@ -17,7 +17,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from fastapi import Depends, FastAPI, Request
+from fastapi import Depends, FastAPI, Query, Request
 from fastapi.concurrency import run_in_threadpool
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import HTMLResponse, JSONResponse
@@ -36,6 +36,7 @@ from ruling.config import Settings
 from ruling.engine import InputTooLong, extended_context
 from ruling.evals import Record, as_record, collect, predict, report
 from ruling.hosted import LONG_CONTEXT_HEADER, HostUnavailable
+from ruling.drift import WINDOW, drift
 from ruling.ledger import DecisionLedger, Outcome, OutcomeBatch, OutcomeRefused, UnknownDecision
 from ruling.questions import (
     MAX_PREDICT_ROWS,
@@ -435,6 +436,11 @@ def create_app(registry: Registry, api_key: str | None, max_pending: int,
         async def outcomes(body: OutcomeBatch) -> dict:
             records = await stored(lambda: ledger.outcomes([(item.id, item) for item in body.outcomes]))
             return {"outcomes": [{"id": record.id, "labels": record.labels} for record in records]}
+
+        @app.get("/v1/drift", dependencies=[Depends(authorize)])
+        async def drifted(window: int = Query(WINDOW, ge=1)) -> dict:
+            """Per served model and question, whether its recent answers moved away from the ones before."""
+            return {"drift": await run_in_threadpool(drift, ledger, window)}
 
         async def stored(write) -> list:
             try:

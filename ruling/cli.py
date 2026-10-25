@@ -19,6 +19,7 @@ from ruling.against import collect_live
 from ruling.build import build_every, build_sst5, build_typesafe, build_wanli, write
 from ruling.calibration import Calibration
 from ruling.config import Settings, configure_memory
+from ruling.drift import WINDOW, drift
 from ruling.engine import Engine
 from ruling.evals import collect, fit, load_dataset, predict, report, write_json, write_predictions
 from ruling.questions import Box, Choice, Noul, Score, SystemOneRequest
@@ -140,6 +141,11 @@ def main(argv: list[str] | None = None) -> None:
                                     help="write the served decisions that have outcomes as training records")
     decisions.add_argument("--ledger", type=Path, required=True, help="the server's RULING_LEDGER file")
     decisions.add_argument("--output", type=Path, required=True)
+
+    drifted = commands.add_parser("drift", help="whether each served question's recent answers moved away from "
+                                                "the ones before, as JSON")
+    drifted.add_argument("--ledger", type=Path, required=True, help="the server's RULING_LEDGER file")
+    drifted.add_argument("--window", type=int, default=WINDOW, help=f"decisions in each window compared (default {WINDOW})")
 
     again = commands.add_parser("retrain", help="train on the ledger's resolved decisions and promote the result "
                                                 "only if it beats the served adapter on held-out data")
@@ -287,6 +293,10 @@ def main(argv: list[str] | None = None) -> None:
         records = list(DecisionLedger(args.ledger).records())
         args.output.write_text("".join(r.model_dump_json(exclude_none=True) + "\n" for r in records))
         print(f"wrote {len(records)} records to {args.output}")
+        return
+    if args.command == "drift":
+        from ruling.ledger import DecisionLedger
+        print(json.dumps({"drift": drift(DecisionLedger(args.ledger), args.window)}, indent=2))
         return
     if args.command == "train-encoder":
         from ruling.decision_train import DecisionTrainConfig, DecisionTrainer

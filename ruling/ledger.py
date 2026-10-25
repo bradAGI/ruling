@@ -174,6 +174,21 @@ class DecisionLedger:
                              [(decision, qid, json.dumps(label), self._now()) for qid, label in labels.items()])
         return record
 
+    def answers_newest_first(self, page: int = 500) -> Iterator[tuple[str, dict]]:
+        """Every logged decision's model and answers, newest first, read a page at a time so neither memory nor
+        the lock is held for the whole ledger."""
+        before = None
+        while True:
+            with self._lock:
+                rows = self._db.execute(
+                    "SELECT rowid, model, response FROM decisions WHERE ? IS NULL OR rowid < ? ORDER BY rowid DESC LIMIT ?",
+                    (before, before, page)).fetchall()
+            if not rows:
+                return
+            for _, model, response in rows:
+                yield model, SystemOneResponse.model_validate_json(response).answers
+            before = rows[-1][0]
+
     def records(self) -> Iterator[Record]:
         """Every decision with at least one outcome, oldest first, as a training record."""
         with self._lock:

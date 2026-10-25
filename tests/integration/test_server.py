@@ -296,3 +296,18 @@ def test_without_a_ledger_the_wire_format_is_unchanged(app):
     with TestClient(app) as client:
         assert set(client.post("/v1/systemone", json=PAYLOAD).json()) == {"model", "answers", "usage"}
         assert client.post("/v1/decisions/x/outcome", json={"labels": {}}).status_code == 404
+
+
+def test_drift_is_served_and_printed_from_the_ledger(engine, tmp_path, capsys):
+    from ruling.cli import main
+
+    ledger = tmp_path / "ledger.sqlite"
+    app = create_app(Registry.single(engine), None, 4, DecisionLedger(ledger))
+    with TestClient(app) as client:
+        for state in ["I was charged twice; refund it."] * 3 + ["Love the product, no issues."] * 3:
+            client.post("/v1/systemone", json={**PAYLOAD, "state": state})
+        served = client.get("/v1/drift", params={"window": 3}).json()["drift"]
+        assert client.get("/v1/drift", params={"window": 0}).status_code == 422
+    assert {(d["model"], d["question"]) for d in served} == {(engine.model_id, q) for q in PAYLOAD["questions"]}
+    main(["drift", "--ledger", str(ledger), "--window", "3"])
+    assert json.loads(capsys.readouterr().out)["drift"] == served

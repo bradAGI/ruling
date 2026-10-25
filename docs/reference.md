@@ -233,6 +233,7 @@ CUDA graphs; `--enforce-eager` avoids it, at some cost in speed.
 | `export-adapter` | write a ruling adapter in PEFT layout for transformers |
 | `import-adapter` | write a PEFT LoRA adapter in the layout ruling serves |
 | `export-decisions` | write the served decisions that have outcomes as training records |
+| `drift` | whether each served question's recent answers moved away from the ones before, as JSON |
 | `retrain` | train on the ledger's resolved decisions and promote the result only if it beats the served adapter on held-out data |
 | `train-encoder` | fully fine-tune a decision encoder on training records |
 
@@ -421,6 +422,18 @@ holds your states verbatim. `RULING_LEDGER_RETAIN_DAYS=30` drops a decision
 that has gone 30 days with no outcome, so the file holds one month of
 unresolved traffic plus everything resolved, rather than growing forever.
 
+**Drift.** `ruling drift --ledger FILE`, or `GET /v1/drift` on the server,
+compares each served model's most recent `--window` answers to a question (200
+by default) with the window before them, reading only the ledger. Each entry
+gives `answer_shift`, the total variation between the two windows' mean answer
+distributions from 0 to 1; `confidence_change`, the change in the winning
+answer's mean probability; and `changed`, true when the mix of winning answers
+moved by at least 0.1 and by more than chance explains (a chi-square test at
+1%). A question asked with other options counts as another question, and one
+with fewer than two windows of traffic is left out. Drift says the traffic
+changed, not that the answers are wrong: it is the cue to collect outcomes for
+that question and retrain.
+
 A request with `"exclude_from_training": true`, meant for benchmark and
 evaluation traffic, is answered as usual but never logged, and its response
 has no `id`.
@@ -605,6 +618,13 @@ reports up to 1,000 outcomes in one request and returns
 together or not at all: an unknown decision answers 404 `unknown_decision`,
 and an outcome that does not fit answers 422 with `param` naming it, such as
 `outcomes.3.labels`.
+
+### GET /v1/drift
+
+`GET /v1/drift?window=200` returns `{"drift": [{"model", "question",
+"decisions", "answer_shift", "confidence_change", "changed"}, …]}` from the
+ledger; see [Learn from your own traffic](#learn-from-your-own-traffic). It
+exists only with a ledger.
 
 ### POST /v1/ask
 
