@@ -18,11 +18,17 @@ PROVIDERS = ["parasail", "coreweave", "streamlake"]
 def test_hosted_teacher_answers_an_obvious_question_within_budget():
     budget = Budget(limit_usd=0.01)
     engine = OpenRouterEngine(MODEL, Calibration(), rotations=3, providers=PROVIDERS, budget=budget)
-    response = engine.evaluate(SystemOneRequest(
-        state="My card was charged twice for order 4471. Please refund the duplicate charge.",
-        questions={"team": Choice(instructions="Which team should handle this?",
-                                  criteria={"billing": "Charges and refunds", "technical": "Bugs", "sales": "Pricing"}),
-                   "refund": Noul(instructions="The customer asks for a refund.")}))
+    try:
+        response = engine.evaluate(SystemOneRequest(
+            state="My card was charged twice for order 4471. Please refund the duplicate charge.",
+            questions={"team": Choice(instructions="Which team should handle this?",
+                                      criteria={"billing": "Charges and refunds", "technical": "Bugs", "sales": "Pricing"}),
+                       "refund": Noul(instructions="The customer asks for a refund.")}))
+    except RuntimeError as exc:
+        # An account with no credit says nothing about the code; any other refusal still fails.
+        if "returned 402" in str(exc):
+            pytest.skip(f"the OpenRouter account has no credit: {exc}")
+        raise
     team = response.answers["team"]
     assert team.choice == "billing" and team.probabilities["billing"] > 0.9
     assert response.answers["refund"].noul > 0.9
