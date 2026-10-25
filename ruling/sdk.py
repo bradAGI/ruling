@@ -15,6 +15,7 @@ import httpx
 from pydantic import TypeAdapter
 
 from ruling.ask import AskResponse
+from ruling.ledger import Outcome, OutcomeBatch
 from ruling.questions import (
     IMAGE_SUFFIXES,
     Answer,
@@ -142,9 +143,17 @@ class RulingClient:
                   (("starting_on", starting_on), ("ending_before", ending_before)) if moment is not None}
         return self._send("GET", "/v1/usage", params=params).json()["usage"]
 
-    def outcome(self, decision_id: str, labels: dict) -> dict:
-        """Report what turned out to be right for a logged decision; returns the labels as stored."""
-        return self._send("POST", f"/v1/decisions/{decision_id}/outcome", {"labels": labels}).json()["labels"]
+    def outcome(self, decision_id: str, labels: dict | None = None, corrections: dict | None = None) -> dict:
+        """Report what turned out to be right for a logged decision: `labels` name it, `corrections` mark the
+        served answers, `{"team": {"correct": False, "answer": "billing"}}`. Returns the labels as stored."""
+        body = Outcome(labels=labels or {}, corrections=corrections or {}).model_dump(mode="json", exclude_defaults=True)
+        return self._send("POST", f"/v1/decisions/{decision_id}/outcome", body).json()["labels"]
+
+    def outcomes(self, outcomes: list[dict]) -> list[dict]:
+        """Outcomes for many decisions, `[{"id", "labels"?, "corrections"?}]`, stored all or none; returns each
+        decision's labels as stored."""
+        body = OutcomeBatch(outcomes=outcomes).model_dump(mode="json", exclude_defaults=True)
+        return self._send("POST", "/v1/decisions/outcomes", body).json()["outcomes"]
 
     def models(self) -> list[ModelInfo]:
         return ModelList.model_validate(self._send("GET", "/v1/models").json()).models

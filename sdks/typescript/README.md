@@ -29,3 +29,6 @@ long-context limits.
 When the server keeps a ledger (`RULING_LEDGER`), each response has an `id`;
 `client.outcome(id, { team: "billing" })` reports what turned out to be right,
 and `systemOne({ ..., excludeFromTraining: true })` keeps a decision out of it.
+`client.outcome(id, undefined, { team: { correct: true } })` marks a served
+answer right or wrong instead, and `client.outcomes([{ id, labels }, …])`
+reports up to 1,000 at once, stored all or none.

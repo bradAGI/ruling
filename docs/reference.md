@@ -398,7 +398,23 @@ curl -s localhost:8010/v1/decisions/$ID/outcome -d '{"labels": {"team": "billing
 Labels take every form a training record does, and are checked against the
 logged question on arrival, so a bad one is refused with 422 rather than
 breaking a training run later. A second report for the same question replaces
-the first. `ruling export-decisions --ledger FILE --output RECORDS` writes every
+the first.
+
+Whoever only knows whether the answer was right can say so instead of naming
+the label:
+
+```bash
+curl -s localhost:8010/v1/decisions/$ID/outcome -H 'content-type: application/json' \
+  -d '{"corrections": {"team": {"correct": true}, "refund": {"correct": false}}}'
+```
+
+Right labels the question with what was served: the choice, the likeliest
+score level, or yes when the noul leaned yes. Wrong labels it with `answer`,
+which a question of two options may leave out, since the other option is the
+only one left; wrong among more options without an answer is refused, as is
+an `answer` that is what was served. Box answers take no outcome.
+`POST /v1/decisions/outcomes` reports up to 1,000 decisions at once, stored
+all or none. `ruling export-decisions --ledger FILE --output RECORDS` writes every
 decision with an outcome as a training record, unlabeled questions left
 unlabeled, ready for `ruling train --data RECORDS`. Off by default: the ledger
 holds your states verbatim. `RULING_LEDGER_RETAIN_DAYS=30` drops a decision
@@ -572,8 +588,19 @@ its engine's id, which a failover changes to say which side answered.
 
 `POST /v1/decisions/<id>/outcome` with `{"labels": {"<id>": label}}` records
 what was right, and returns the labels as stored; it exists only with a ledger.
-See [Learn from your own traffic](#learn-from-your-own-traffic) for the label
+`{"corrections": {"<id>": {"correct": false, "answer": "billing"}}}` marks a
+served answer instead; both may come together for different questions. See
+[Learn from your own traffic](#learn-from-your-own-traffic) for the label
 forms it accepts and what happens to the decisions afterward.
+
+### POST /v1/decisions/outcomes
+
+`{"outcomes": [{"id": "<decision>", "labels"?: {…}, "corrections"?: {…}}, …]}`
+reports up to 1,000 outcomes in one request and returns
+`{"outcomes": [{"id", "labels"}, …]}` in the same order. They are stored
+together or not at all: an unknown decision answers 404 `unknown_decision`,
+and an outcome that does not fit answers 422 with `param` naming it, such as
+`outcomes.3.labels`.
 
 ### POST /v1/ask
 
@@ -719,7 +746,7 @@ Errors come in the hosted API's shape, `{"error": {"code", "message",
 | 422 | `invalid_options` | a well-formed question the model cannot answer: a choice with one option or more than the model reads, or nothing to ask; `param` is `questions.<id>` |
 | 422 | `unsupported_modality` | the state holds images and the selected model reads only text (`param` is `state`), or a box question went to a model that does not locate (`param` is `questions`) |
 | 422 | `context_too_long` | a request over a token limit; `param` is `questions.<id>` when one question is at fault |
-| 422 | `invalid_input` | without `param`: a request the engine refuses, such as one a remote decision server rejects, or a compressed body that does not inflate; `param` is `assets` for an asset the text never mentions, a part no asset names, or bytes that are not an image; on the outcome route, `param` is `labels` for a label that does not fit the logged question; on the batch routes, `param` is `rows` for no rows, more than 50,000, or none with labels, and `rows.<i>` for a row an evaluation cannot score |
+| 422 | `invalid_input` | without `param`: a request the engine refuses, such as one a remote decision server rejects, or a compressed body that does not inflate; `param` is `assets` for an asset the text never mentions, a part no asset names, or bytes that are not an image; on the outcome routes, `param` is `labels` for a label that does not fit the logged question and `corrections` for a mark that does not say what was right, prefixed `outcomes.<i>.` in a batch; on the batch routes, `param` is `rows` for no rows, more than 50,000, or none with labels, and `rows.<i>` for a row an evaluation cannot score |
 | 413 | `body_too_large` | a body over 32 MiB, as sent or once inflated |
 | 415 | `unsupported_encoding` | a `Content-Encoding` other than `gzip` or `zstd` |
 | 404 | `unknown_model` | a `model` the server does not answer for; the message lists the names it does |
@@ -793,7 +820,9 @@ data from your own traffic; see [calibration](measurements.md#running-the-harnes
 
 `RulingClient(api_key=...)` (or `RULING_API_KEY`, the server's own variable)
 talks to a server that requires a key. With a ledger, `response.id` and
-`client.outcome(response.id, {"team": "billing"})` report what was right, and
+`client.outcome(response.id, {"team": "billing"})` report what was right
+(`corrections={"team": {"correct": True}}` marks it instead, and
+`client.outcomes([...])` sends up to 1,000), and
 `system_one(..., exclude_from_training=True)` keeps a decision out of it.
 `client.models()` lists the served models.
 

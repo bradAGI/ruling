@@ -41,9 +41,15 @@ export class RulingClient {
                          longContext ? { "TypeSafe-Danger-Zone-Long-Context": "true" } : {});
   }
 
-  async outcome(decisionId, labels) {
-    const body = await this.#request("POST", `/v1/decisions/${encodeURIComponent(decisionId)}/outcome`, { labels });
+  async outcome(decisionId, labels, corrections) {
+    const body = await this.#request("POST", `/v1/decisions/${encodeURIComponent(decisionId)}/outcome`,
+                                     { ...(labels && { labels }), ...(corrections && { corrections }) });
     return body.labels;
+  }
+
+  async outcomes(outcomes) {
+    const body = await this.#request("POST", "/v1/decisions/outcomes", { outcomes });
+    return body.outcomes;
   }
 
   async models() {

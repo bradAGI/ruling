@@ -151,8 +151,11 @@ const client = new RulingClient({{ baseUrl: {json.dumps(url)} }});
 const questions = {{ refund: noul("The customer asks for a refund.") }};
 const logged = await client.systemOne({{ state: {json.dumps(PAYLOAD["state"])}, questions }});
 const stored = await client.outcome(logged.id, {{ refund: true }});
+const marked = await client.outcome(logged.id, undefined, {{ refund: {{ correct: false }} }});
+const batch = await client.outcomes([{{ id: logged.id, labels: {{ refund: true }} }}]);
 const excluded = await client.systemOne({{ state: "A benchmark row.", questions, excludeFromTraining: true }});
-console.log(JSON.stringify({{ stored, excludedId: excluded.id ?? null }}));
+console.log(JSON.stringify({{ stored, marked, batch, excludedId: excluded.id ?? null, logged: logged.id,
+                              served: logged.answers.refund.noul >= 0.5 }}));
 """
     try:
         result = subprocess.run(["node", "--input-type=module", "-e", script], capture_output=True, text=True,
@@ -161,7 +164,10 @@ console.log(JSON.stringify({{ stored, excludedId: excluded.id ?? null }}));
         server.should_exit = True
         thread.join(timeout=10)
     assert result.returncode == 0, result.stderr
-    assert json.loads(result.stdout.strip().splitlines()[-1]) == {"stored": {"refund": True}, "excludedId": None}
+    out = json.loads(result.stdout.strip().splitlines()[-1])
+    assert out["stored"] == {"refund": True} and out["excludedId"] is None
+    assert out["batch"] == [{"id": out["logged"], "labels": {"refund": True}}]
+    assert out["marked"] == {"refund": not out["served"]}
     assert [r.labels for r in DecisionLedger(ledger).records()] == [{"refund": True}]
 
 
@@ -214,6 +220,29 @@ def test_a_logged_decision_takes_its_outcome_and_exports_as_training_data(engine
                    check=True)
     [record] = load_dataset(exported)
     assert record.state == PAYLOAD["state"] and record.labels == {"refund": True}
+
+
+def test_right_and_wrong_marks_and_batches_of_outcomes_become_labels(engine, tmp_path):
+    ledger = tmp_path / "ledger.sqlite"
+    server, thread, url = _serve(create_app(Registry.single(engine), None, 4, DecisionLedger(ledger)))
+    refund = {"refund": Noul(instructions="The customer asks for a refund.")}
+    try:
+        with RulingClient(base_url=url) as client:
+            first, second = (client.system_one(state=PAYLOAD["state"], questions=refund) for _ in range(2))
+            served = first.answers["refund"].noul >= 0.5
+            assert client.outcome(first.id, corrections={"refund": {"correct": False}}) == {"refund": not served}
+            with pytest.raises(RulingError) as refused:
+                client.outcomes([{"id": first.id, "corrections": {"refund": {"correct": True}}},
+                                 {"id": second.id, "labels": {"refund": "maybe"}}])
+            assert (refused.value.code, refused.value.param) == ("invalid_input", "outcomes.1.labels")
+            assert client.outcomes([{"id": first.id, "corrections": {"refund": {"correct": True}}},
+                                    {"id": second.id, "labels": {"refund": False}}]) == \
+                [{"id": first.id, "labels": {"refund": served}}, {"id": second.id, "labels": {"refund": False}}]
+    finally:
+        server.should_exit = True
+        thread.join(timeout=10)
+    assert {r.id: r.labels for r in DecisionLedger(ledger).records()} == \
+        {first.id: {"refund": served}, second.id: {"refund": False}}
 
 
 def test_a_decision_kept_out_of_training_is_answered_but_not_logged(engine, tmp_path):

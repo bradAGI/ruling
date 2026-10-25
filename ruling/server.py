@@ -36,7 +36,7 @@ from ruling.config import Settings
 from ruling.engine import InputTooLong, extended_context
 from ruling.evals import Record, as_record, collect, predict, report
 from ruling.hosted import LONG_CONTEXT_HEADER, HostUnavailable
-from ruling.ledger import DecisionLedger, Outcome, UnknownDecision
+from ruling.ledger import DecisionLedger, Outcome, OutcomeBatch, OutcomeRefused, UnknownDecision
 from ruling.questions import (
     MAX_PREDICT_ROWS,
     InvalidOptions,
@@ -428,13 +428,21 @@ def create_app(registry: Registry, api_key: str | None, max_pending: int,
     if ledger is not None:
         @app.post("/v1/decisions/{decision}/outcome", dependencies=[Depends(authorize)])
         async def outcome(decision: str, body: Outcome) -> dict:
+            [record] = await stored(lambda: [ledger.outcome(decision, body.labels, body.corrections)])
+            return {"id": decision, "labels": record.labels}
+
+        @app.post("/v1/decisions/outcomes", dependencies=[Depends(authorize)])
+        async def outcomes(body: OutcomeBatch) -> dict:
+            records = await stored(lambda: ledger.outcomes([(item.id, item) for item in body.outcomes]))
+            return {"outcomes": [{"id": record.id, "labels": record.labels} for record in records]}
+
+        async def stored(write) -> list:
             try:
-                record = await run_in_threadpool(ledger.outcome, decision, body.labels)
+                return await run_in_threadpool(write)
             except UnknownDecision as exc:
                 raise ApiError(404, "unknown_decision", str(exc)) from exc
-            except ValueError as exc:
-                raise ApiError(422, "invalid_input", str(exc), "labels") from exc
-            return {"id": decision, "labels": record.labels}
+            except OutcomeRefused as exc:
+                raise ApiError(422, "invalid_input", str(exc), exc.param) from exc
 
     @app.get("/v1/models", response_model=ModelList, dependencies=[Depends(authorize)])
     def models() -> ModelList:

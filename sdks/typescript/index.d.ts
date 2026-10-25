@@ -20,6 +20,9 @@ export interface BoxCoordinates { top: number; bottom: number; left: number; rig
 export interface BoxAnswer { type: "box"; box: BoxCoordinates; confidence: number }
 export type Answer = ChoiceAnswer | ScoreAnswer | NoulAnswer | BoxAnswer;
 
+/** Right labels a question with what was served; wrong with `answer`, which a question of two options may omit. */
+export type Correction = { correct: true } | { correct: false; answer?: string | number | boolean };
+
 export interface SystemOneResponse<Q extends Record<string, Question>> {
   /** Present when the server keeps a ledger: the decision to report an outcome for. */
   id?: string;
@@ -60,6 +63,11 @@ export class RulingClient {
     /** Ask the server for its long-context limits, as the hosted API's danger-zone header does. */
     longContext?: boolean;
   }): Promise<SystemOneResponse<Q>>;
-  outcome(decisionId: string, labels: Record<string, Label>): Promise<Record<string, Label>>;
+  /** What was right for a logged decision: `labels` name it, `corrections` mark the served answers. */
+  outcome(decisionId: string, labels?: Record<string, Label>,
+          corrections?: Record<string, Correction>): Promise<Record<string, Label>>;
+  /** Outcomes for up to 1,000 decisions, stored all or none. */
+  outcomes(outcomes: Array<{ id: string; labels?: Record<string, Label>; corrections?: Record<string, Correction> }>):
+    Promise<Array<{ id: string; labels: Record<string, Label> }>>;
   models(): Promise<ModelInfo[]>;
 }

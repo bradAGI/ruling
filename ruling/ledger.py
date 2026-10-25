@@ -21,10 +21,11 @@ import uuid
 from collections.abc import Callable, Iterator
 from pathlib import Path
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
-from ruling.evals import Label, Record
-from ruling.questions import SystemOneRequest, SystemOneResponse
+from ruling.evals import Label, Record, label_index
+from ruling.questions import (QUESTION, Choice, ChoiceAnswer, Noul, NoulAnswer, Score, ScoreAnswer, Strict,
+                              SystemOneRequest, SystemOneResponse, option_keys)
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS decisions (
@@ -45,10 +46,58 @@ CREATE TABLE IF NOT EXISTS outcomes (
 """
 
 
-class Outcome(BaseModel):
-    """What turned out to be right, per question, in the label forms a training record takes."""
+MAX_OUTCOMES = 1000
+"""Outcomes one batch may carry; a batch is stored whole or not at all."""
 
-    labels: dict[str, Label] = Field(min_length=1)
+
+class Correction(Strict):
+    """Whether the served answer to a question was right, for whoever can say that more easily than name the
+    label: right labels it with what was served; wrong labels it with `answer`, which a question of two options
+    may leave out since the other option is the only one left."""
+
+    correct: bool
+    answer: str | int | bool | None = None
+
+    @model_validator(mode="after")
+    def _answer_only_when_wrong(self) -> Correction:
+        if self.correct and self.answer is not None:
+            raise ValueError("a correct answer needs no answer; send one only with correct: false")
+        return self
+
+
+class Outcome(Strict):
+    """What turned out to be right, per question: `labels` in the forms a training record takes, `corrections` as
+    right or wrong marks on what was served, or both for different questions."""
+
+    labels: dict[str, Label] = Field(default_factory=dict)
+    corrections: dict[str, Correction] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def _says_something_once(self) -> Outcome:
+        if not self.labels and not self.corrections:
+            raise ValueError("an outcome needs labels or corrections")
+        both = set(self.labels) & set(self.corrections)
+        if both:
+            raise ValueError(f"{', '.join(sorted(both))}: given both a label and a correction")
+        return self
+
+
+class DecisionOutcome(Outcome):
+    """An outcome with the id of the decision it is for, as a batch carries it."""
+
+    id: str
+
+
+class OutcomeBatch(Strict):
+    outcomes: list[DecisionOutcome] = Field(min_length=1, max_length=MAX_OUTCOMES)
+
+
+class OutcomeRefused(ValueError):
+    """An outcome that does not fit its decision, naming the field at fault as the API reports it."""
+
+    def __init__(self, message: str, param: str):
+        super().__init__(message)
+        self.param = param
 
 
 class UnknownDecision(KeyError):
@@ -86,19 +135,43 @@ class DecisionLedger:
         with self._lock:
             return [row[0] for row in self._db.execute("SELECT id FROM decisions ORDER BY created, rowid")]
 
-    def outcome(self, decision: str, labels: dict) -> Record:
+    def outcome(self, decision: str, labels: dict | None = None, corrections: dict | None = None) -> Record:
         """Attach outcomes to a decision; a later outcome for the same question replaces the earlier one.
 
         The labels are checked as a training record would check them, so nothing
         stored here can fail later in `ruling train`. Returns the record as it now stands.
         """
         with self._lock, self._db:
-            row = self._db.execute("SELECT request FROM decisions WHERE id = ?", (decision,)).fetchone()
-            if row is None:
-                raise UnknownDecision(decision)
-            record = self._record(decision, json.loads(row[0]), self._labels(decision) | labels)
-            self._db.executemany("INSERT OR REPLACE INTO outcomes VALUES (?, ?, ?, ?)",
-                                 [(decision, qid, json.dumps(label), self._now()) for qid, label in labels.items()])
+            return self._apply(decision, Outcome(labels=labels or {}, corrections=corrections or {}))
+
+    def outcomes(self, outcomes: list[tuple[str, Outcome]]) -> list[Record]:
+        """Attach every outcome in one transaction: an unknown decision or a label that does not fit refuses
+        the whole batch, so a client retrying it never leaves half of it stored."""
+        records = []
+        with self._lock, self._db:
+            for index, (decision, outcome) in enumerate(outcomes):
+                try:
+                    records.append(self._apply(decision, outcome))
+                except OutcomeRefused as exc:
+                    raise OutcomeRefused(str(exc), f"outcomes.{index}.{exc.param}") from exc
+        return records
+
+    def _apply(self, decision: str, outcome: Outcome) -> Record:
+        row = self._db.execute("SELECT request, response FROM decisions WHERE id = ?", (decision,)).fetchone()
+        if row is None:
+            raise UnknownDecision(decision)
+        request, response = json.loads(row[0]), SystemOneResponse.model_validate_json(row[1])
+        try:
+            labels = outcome.labels | {qid: _corrected(request["questions"], response, qid, correction)
+                                       for qid, correction in outcome.corrections.items()}
+        except ValueError as exc:
+            raise OutcomeRefused(str(exc), "corrections") from exc
+        try:
+            record = self._record(decision, request, self._labels(decision) | labels)
+        except ValueError as exc:
+            raise OutcomeRefused(str(exc), "labels") from exc
+        self._db.executemany("INSERT OR REPLACE INTO outcomes VALUES (?, ?, ?, ?)",
+                             [(decision, qid, json.dumps(label), self._now()) for qid, label in labels.items()])
         return record
 
     def records(self) -> Iterator[Record]:
@@ -118,3 +191,39 @@ class DecisionLedger:
     @staticmethod
     def _record(decision: str, request: dict, labels: dict) -> Record:
         return Record(id=decision, state=request["state"], questions=request["questions"], labels=labels)
+
+
+def _served(question: Choice | Score | Noul, answer: ChoiceAnswer | ScoreAnswer | NoulAnswer) -> int:
+    """The index of the served answer: the choice, the likeliest score level, or yes when the noul leaned yes."""
+    if isinstance(answer, ChoiceAnswer):
+        return option_keys(question).index(answer.choice)
+    if isinstance(answer, ScoreAnswer):
+        return int(max(answer.probabilities, key=answer.probabilities.get))
+    return 0 if answer.noul >= 0.5 else 1
+
+
+def _label(question: Choice | Score | Noul, index: int) -> str | int | bool:
+    """The label naming option `index`, in the form `label_index` reads back."""
+    if isinstance(question, Noul):
+        return index == 0
+    return index if isinstance(question, Score) else option_keys(question)[index]
+
+
+def _corrected(questions: dict, response: SystemOneResponse, qid: str, correction: Correction) -> str | int | bool:
+    """The label a right or wrong mark on the served answer to `qid` implies."""
+    if qid not in questions:
+        raise ValueError(f"{qid}: no such question in the decision")
+    question = QUESTION.validate_python(questions[qid])
+    answer = response.answers[qid]
+    if not isinstance(answer, (ChoiceAnswer, ScoreAnswer, NoulAnswer)):
+        raise ValueError(f"{qid}: a {answer.type} answer is not trained on, so it takes no correction")
+    served = _served(question, answer)
+    if correction.correct:
+        return _label(question, served)
+    if correction.answer is None:
+        if len(option_keys(question)) != 2:
+            raise ValueError(f"{qid}: wrong among {len(option_keys(question))} options; send the right answer")
+        return _label(question, 1 - served)
+    if label_index(question, correction.answer) == served:
+        raise ValueError(f"{qid}: marked wrong, but {correction.answer!r} is what was served")
+    return correction.answer
