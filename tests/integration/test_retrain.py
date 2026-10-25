@@ -49,7 +49,7 @@ def test_served_outcomes_train_a_version_that_is_promoted_only_if_better(engine,
         report = json.loads((adapters / version / REPORT).read_text())
         assert report["records"] == len(served) and report["started_from"] == before
         assert (adapters / version / "adapters.safetensors").exists()
-        assert report["promoted"] == should_promote(report["current"], report["candidate"])[0]
+        assert report["promoted"] == should_promote(report["current"], report["candidate"], report["worse"])[0]
         now = (adapters / CURRENT).resolve().name if (adapters / CURRENT).exists() else None
         assert now == (version if report["promoted"] else before)
         # Both versions were judged at their own fitted temperatures, and the candidate's ship with it:

@@ -436,8 +436,12 @@ RULING_CALIBRATION=runs/adapters/tickets/current/calibration.json uv run ruling 
 Each run exports the decisions with outcomes, drops any whose state appears in
 a `--holdout` set, and trains the next version (`v1`, `v2`, …) from the
 weights of the one being served. It then scores both on the held-out sets and
-repoints `current` at the new version only if its log loss is lower and its
-accuracy is no worse; restart the server to serve it. Each version is scored
+repoints `current` at the new version only if its log loss is lower, its
+accuracy is no worse, and no single question got worse; restart the server to
+serve it. A question counts as worse when, on the held-out rows the two
+versions answer differently, the new one loses more than chance allows (an
+exact sign test at 5%), so a gain on a busy question cannot hide a collapse on
+a rare one; the report lists them under `worse` and the verdict names them. Each version is scored
 at its own fitted temperature, because training sharpens an adapter faster
 than it corrects it and a version that is right more often must not lose for
 being overconfident. The candidate's temperatures are saved beside its weights

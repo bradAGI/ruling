@@ -6,7 +6,8 @@ a relative link to the version being served (`RULING_ADAPTER=<dir>/current`).
 A run exports the ledger's resolved decisions, drops any whose state is in a
 held-out set, trains the next version (from `current`'s weights when there is
 one), scores both versions on the held-out sets, and repoints `current` only
-when the new one has lower log loss without losing accuracy. Each version is
+when the new one has lower log loss without losing accuracy overall or on any
+one question. Each version is
 scored at its own fitted temperature: training sharpens an adapter faster than
 it corrects it, and a version that is right more often must not lose for being
 overconfident. The candidate's temperatures are saved beside its weights, so
@@ -18,8 +19,10 @@ comparison in its version directory, promoted or not.
 from __future__ import annotations
 
 import json
+import math
 import os
 import re
+from collections import defaultdict
 from dataclasses import replace
 from pathlib import Path
 
@@ -28,8 +31,9 @@ import mlx.core as mx
 from ruling.calibration import Calibration, Provenance
 from ruling.config import Settings
 from ruling.engine import ADAPTER_CONFIG
-from ruling.evals import Observation, Record, collect, decision_blocks, fit, load_dataset
+from ruling.evals import Observation, Record, collect, decision_blocks, fit, load_dataset, target_of
 from ruling.ledger import DecisionLedger
+from ruling.metrics import credit
 from ruling.registry import build_engine
 from ruling.train import TRAINING, Trainer, TrainConfig, _state_key
 
@@ -38,16 +42,41 @@ REPORT = "retrain.json"
 CALIBRATION = "calibration.json"
 DECISIONS = "decisions.jsonl"
 VERSION = re.compile(r"v(\d+)")
+SIGNIFICANCE = 0.05
+"""How unlikely by chance a question's losses must be before the candidate counts as worse on it."""
 
 
-def should_promote(current: dict, candidate: dict) -> tuple[bool, str]:
-    """Held-out log loss must fall and accuracy must not: a sharper but less often right adapter is not better."""
+def should_promote(current: dict, candidate: dict, worse: list[str]) -> tuple[bool, str]:
+    """Held-out log loss must fall and accuracy must not: a sharper but less often right adapter is not better.
+    Nor is one that is worse on any question in `worse`, however much it gains elsewhere."""
+    if worse:
+        return False, f"held-out answers got worse on {', '.join(worse)}"
     if candidate["nll"] >= current["nll"]:
         return False, f"held-out log loss {candidate['nll']:.4f} is not below {current['nll']:.4f}"
     if candidate["accuracy"] < current["accuracy"]:
         return False, f"held-out accuracy {candidate['accuracy']:.4f} fell below {current['accuracy']:.4f}"
     return True, (f"held-out log loss {current['nll']:.4f} -> {candidate['nll']:.4f}, "
                   f"accuracy {current['accuracy']:.4f} -> {candidate['accuracy']:.4f}")
+
+
+def worse_questions(current: list[Observation], candidate: list[Observation]) -> list[str]:
+    """The questions the candidate gets right less often than the served version beyond chance: on the held-out
+    rows where the two are not equally right, an exact two-sided sign test (McNemar's) of losses against wins."""
+    served = {(o.record, o.question_id): o for o in current}
+    tally: dict[str, list[int]] = defaultdict(lambda: [0, 0])
+    for new in candidate:
+        now = served[(new.record, new.question_id)]
+        if new.label is None or new.logits is None or now.logits is None:
+            continue
+        before, after = credit(now.logits, target_of(now)), credit(new.logits, target_of(new))
+        if before != after:
+            tally[new.question_id][after > before] += 1
+    return sorted(q for q, (lost, won) in tally.items() if lost > won and _sign_test(lost, lost + won) < SIGNIFICANCE)
+
+
+def _sign_test(larger: int, total: int) -> float:
+    """The two-sided probability of a split at least this uneven when each side is equally likely."""
+    return min(1.0, 2 * sum(math.comb(total, k) for k in range(larger, total + 1)) / 2 ** total)
 
 
 def score(observations: list[Observation], provenance: Provenance) -> tuple[dict, Calibration]:
@@ -104,14 +133,16 @@ def retrain(ledger: DecisionLedger, adapters: Path, model: str, holdout: list[Pa
     served = build_engine(replace(settings, model=model, adapter_path=start, calibration_path=None, cascade_to=None,
                                   failover_to=None))
     candidate = served.variant(version, Calibration())
-    scored = {name: score(collect(engine, held_out), engine.provenance)
-              for name, engine in (("current", served), ("candidate", candidate))}
+    observed = {name: collect(engine, held_out) for name, engine in (("current", served), ("candidate", candidate))}
+    scored = {name: score(observations, engine.provenance)
+              for (name, observations), engine in zip(observed.items(), (served, candidate))}
     scored["candidate"][1].save(version / CALIBRATION)
     scores = {name: {**metrics, "temperatures": calibration.temperatures}
               for name, (metrics, calibration) in scored.items()}
-    promoted, reason = should_promote(scores["current"], scores["candidate"])
+    worse = worse_questions(observed["current"], observed["candidate"])
+    promoted, reason = should_promote(scores["current"], scores["candidate"], worse)
     report = {"version": version.name, "started_from": start.name if start else None, "records": len(records),
-              "dropped_held_out": dropped, "holdout": [str(p) for p in holdout], **scores,
+              "dropped_held_out": dropped, "holdout": [str(p) for p in holdout], **scores, "worse": worse,
               "promoted": promoted, "reason": reason}
     (version / REPORT).write_text(json.dumps(report, indent=2) + "\n")
     if promoted:

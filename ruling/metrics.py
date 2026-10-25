@@ -16,6 +16,11 @@ PROBABILITY_FLOOR = 1e-12
 """Log loss is taken on probabilities floored here, so an impossible answer costs a finite amount."""
 
 
+def credit(p: np.ndarray, y: np.ndarray) -> float:
+    """How right one answer is: the share of the options tied for p's top that are tied for y's top."""
+    return float(np.isin(np.flatnonzero(p == p.max()), np.flatnonzero(y == y.max())).mean())
+
+
 def decision_metrics(probs: list[np.ndarray], targets: list[np.ndarray], bins: int = 10) -> dict:
     """Pooled metrics over paired distributions and targets; `{"n": 0}` for empty input.
 
@@ -37,9 +42,8 @@ def decision_metrics(probs: list[np.ndarray], targets: list[np.ndarray], bins: i
         p, y = np.asarray(p, dtype=np.float64), np.asarray(y, dtype=np.float64)
         if p.shape != y.shape:
             raise ValueError(f"decision {i}: probabilities have {p.size} entries, target has {y.size}")
-        predicted = np.flatnonzero(p == p.max())
         confidence[i] = p.max()
-        correct[i] = np.isin(predicted, np.flatnonzero(y == y.max())).mean()
+        correct[i] = credit(p, y)
         nll[i] = -(y * np.log(np.maximum(p, PROBABILITY_FLOOR))).sum()
         brier[i] = ((p - y) ** 2).sum()
     ece = 0.0

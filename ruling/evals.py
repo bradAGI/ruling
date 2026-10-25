@@ -376,6 +376,14 @@ def report(observations: list[Observation], calibration: Calibration) -> dict:
     return result
 
 
+def target_of(observation: Observation) -> np.ndarray:
+    """What a labeled observation is scored against: its soft `target` reference where it has one, else one-hot
+    on its label."""
+    if TARGET in observation.references:
+        return observation.references[TARGET]
+    return np.eye(len(observation.keys))[observation.label]
+
+
 def decision_blocks(observations: list[Observation], calibration: Calibration) -> dict:
     """`decision_metrics` on every labeled, scored question: pooled, keyed by type, and keyed by question id.
 
@@ -383,7 +391,7 @@ def decision_blocks(observations: list[Observation], calibration: Calibration) -
     """
     labeled = [o for o in observations if o.logits is not None and o.label is not None]
     probs = [softmax(o.logits, calibration.temperature(o.question_type)) for o in labeled]
-    targets = [o.references[TARGET] if TARGET in o.references else np.eye(len(o.keys))[o.label] for o in labeled]
+    targets = [target_of(o) for o in labeled]
 
     def block(select) -> dict:
         chosen = [i for i, o in enumerate(labeled) if select(o)]

@@ -7,7 +7,8 @@ import numpy as np
 
 from ruling.calibration import Calibration, Provenance
 from ruling.evals import Observation, Record, decision_blocks
-from ruling.retrain import CURRENT, REPORT, history, next_version, promote, score, should_promote, trainable
+from ruling.retrain import (CURRENT, REPORT, history, next_version, promote, score, should_promote, trainable,
+                            worse_questions)
 
 QUESTION = {"q": {"type": "noul", "instructions": "It is about money."}}
 
@@ -16,7 +17,7 @@ def test_promotion_needs_lower_log_loss_and_no_lost_accuracy():
     grid = [0.6, 0.7, 0.8]
     for (acc_now, nll_now), (acc_new, nll_new) in itertools.product(itertools.product(grid, grid), repeat=2):
         promoted, reason = should_promote({"n": 10, "accuracy": acc_now, "nll": nll_now},
-                                          {"n": 10, "accuracy": acc_new, "nll": nll_new})
+                                          {"n": 10, "accuracy": acc_new, "nll": nll_new}, [])
         assert promoted == (nll_new < nll_now and acc_new >= acc_now) and reason
 
 
@@ -38,14 +39,46 @@ def test_a_more_accurate_but_overconfident_candidate_is_judged_on_its_calibrated
     versions = {"current": observations(0.8, 1.0), "candidate": observations(0.9, 8.0)}
     raw = {name: decision_blocks(rows, Calibration())["overall"] for name, rows in versions.items()}
     assert raw["candidate"]["accuracy"] > raw["current"]["accuracy"] and raw["candidate"]["nll"] > raw["current"]["nll"]
-    assert not should_promote(raw["current"], raw["candidate"])[0]
+    assert not should_promote(raw["current"], raw["candidate"], [])[0]
 
     provenance = Provenance("m", None, 1, True)
     scored = {name: score(rows, provenance) for name, rows in versions.items()}
-    assert should_promote(scored["current"][0], scored["candidate"][0])[0]
+    assert should_promote(scored["current"][0], scored["candidate"][0], [])[0]
     assert scored["candidate"][1].temperatures["noul"] > scored["current"][1].temperatures["noul"] > 0
     assert scored["candidate"][1].provenance == provenance
     assert scored["candidate"][0]["accuracy"] == raw["candidate"]["accuracy"]
+
+
+def answered(question_id: str, rights: list[bool]) -> list[Observation]:
+    """One held-out row per entry, answered right or wrong with a clear margin."""
+    return [Observation(i, question_id, "noul", None, ["yes", "no"], np.array([2.0, 0.0] if right else [0.0, 2.0]),
+                        0, {}, None) for i, right in enumerate(rights)]
+
+
+def test_a_better_average_does_not_promote_a_version_that_breaks_one_question():
+    """Gains on a large question could hide a collapse on a small one; each question is tested on the rows the
+    two versions answer differently, and the verdict names the questions it lost."""
+    current = answered("team", [False] * 40 + [True] * 60) + answered("refund", [True] * 10)
+    candidate = answered("team", [True] * 100) + answered("refund", [False] * 10)
+    assert worse_questions(current, candidate) == ["refund"]
+    better = {"n": 110, "accuracy": 0.91, "nll": 0.3}
+    promoted, reason = should_promote({"n": 110, "accuracy": 0.64, "nll": 0.8}, better, ["refund"])
+    assert not promoted and "refund" in reason
+
+
+def test_a_question_is_worse_only_beyond_chance_and_only_where_the_versions_disagree():
+    for lost, won in [(1, 0), (3, 0), (5, 1), (8, 6)]:
+        current = answered("q", [True] * lost + [False] * won + [True] * 20)
+        candidate = answered("q", [False] * lost + [True] * won + [True] * 20)
+        assert worse_questions(current, candidate) == []
+    for lost, won in [(6, 0), (10, 2), (30, 15)]:
+        current = answered("q", [True] * lost + [False] * won)
+        candidate = answered("q", [False] * lost + [True] * won)
+        assert worse_questions(current, candidate) == ["q"]
+    # Unscored rows on either side are not compared.
+    unscored = [Observation(o.record, o.question_id, o.question_type, None, o.keys, None, o.label, {}, None)
+                for o in answered("q", [False] * 10)]
+    assert worse_questions(answered("q", [True] * 10), unscored) == []
 
 
 def test_versions_count_up_past_every_existing_one(tmp_path):
