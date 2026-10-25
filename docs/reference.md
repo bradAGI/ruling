@@ -312,7 +312,9 @@ scores them; `client.predict(rows)` and `client.evaluate(rows)` in the
 
 To turn a strong model's answers into training targets for a small one, use
 `ruling build-corpus answers --questions ROWS --writer MODEL` instead: it keeps
-each answer's full distribution as a soft label.
+each answer's full distribution as a soft label. Rows longer than the model
+reads (`RULING_MAX_INPUT_TOKENS`) are skipped and counted, and a run that can
+answer none of them stops with an error rather than writing an empty file.
 
 ### build-dataset and build-corpus
 

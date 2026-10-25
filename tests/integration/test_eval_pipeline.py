@@ -144,3 +144,20 @@ def test_cli_teacher_answers_resume_without_duplicates_past_a_row_too_long(tmp_p
         more.write(json.dumps({"state": "Lost parcel.", "questions": question}) + "\n")
     main(command)
     assert [r.state for r in load_dataset(output)] == ["Paid twice.", "Lost parcel."]
+
+
+def test_distilling_answers_too_long_for_the_teacher_refuses_instead_of_writing_nothing(tmp_path, monkeypatch, test_model):
+    from ruling.build import write
+
+    questions, answers = tmp_path / "questions.jsonl", tmp_path / "answers.jsonl"
+    write([{"state": "My card was charged twice for one order; please refund the duplicate charge.",
+            "questions": {"refund": {"type": "noul", "instructions": "The customer asks for a refund."}}}], questions)
+    command = ["build-corpus", "answers", "--questions", str(questions), "--output", str(answers),
+               "--writer", test_model, "--rotations", "1"]
+    monkeypatch.setenv("RULING_MAX_INPUT_TOKENS", "8")
+    with pytest.raises(ValueError, match="1 of 1 records longer than the teacher reads"):
+        main(command)
+    assert not answers.exists() or not answers.read_text().strip()
+    monkeypatch.setenv("RULING_MAX_INPUT_TOKENS", "4096")
+    main(command)
+    assert len(load_dataset(answers)) == 1

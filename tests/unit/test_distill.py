@@ -1,3 +1,5 @@
+import pytest
+
 from ruling.distill import parse_questions, writer_messages
 
 
@@ -47,3 +49,35 @@ def test_a_resumed_run_answers_only_the_records_not_yet_written(tmp_path):
     written.write_text(answered.model_dump_json() + "\n")
     assert unanswered([too_long, paid, shipped], written) == [too_long, shipped]
     assert unanswered([paid], tmp_path / "missing.jsonl") == [paid]
+
+
+class ShortTeacher:
+    """A teacher that reads states up to `limit` characters and refuses longer ones as the engine does."""
+
+    def __init__(self, limit):
+        self.limit = limit
+
+    def score(self, state, questions):
+        from types import SimpleNamespace
+
+        import numpy as np
+
+        from ruling.engine import InputTooLong
+
+        if len(state) > self.limit:
+            raise InputTooLong("exceeds the maximum context length")
+        return SimpleNamespace(raw={qid: SimpleNamespace(keys=["yes", "no"], logits=np.zeros(2)) for qid in questions})
+
+
+def test_records_too_long_for_the_teacher_are_counted_and_a_run_that_keeps_none_refuses():
+    """They were skipped without a word, so a long-context file could come out nearly empty."""
+    from ruling.distill import answer_locally
+    from ruling.evals import Record
+
+    question = {"q": {"type": "noul", "instructions": "It is about money."}}
+    records = [Record(state="short", questions=question), Record(state="a much longer state", questions=question)]
+    said = []
+    assert [r.state for r in answer_locally(records, ShortTeacher(10), said.append)] == ["short"]
+    assert any("1 of 2" in line for line in said)
+    with pytest.raises(ValueError, match="2 of 2"):
+        list(answer_locally(records, ShortTeacher(3), said.append))

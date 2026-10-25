@@ -119,13 +119,22 @@ def unanswered(records: list[Record], written: Path) -> list[Record]:
 
 
 def answer_locally(records: list[Record], engine, log=print):
-    """Yield each record with the engine's answer distributions as `target` references; records too long are skipped."""
+    """Yield each record with the engine's answer distributions as `target` references. Records too long for the
+    engine are skipped and counted, and a run that answers none of them refuses rather than writing nothing."""
+    skipped = 0
     for index, record in enumerate(records):
         try:
             scored = engine.score(record.state, record.questions)
         except InputTooLong:
+            skipped += 1
             continue
         targets = {qid: dict(zip(raw.keys, (float(p) for p in softmax(raw.logits)))) for qid, raw in scored.raw.items()}
         if (index + 1) % 100 == 0:
             log(f"{index + 1}/{len(records)} answered")
         yield record.model_copy(update={"references": {qid: {"target": t} for qid, t in targets.items()}})
+    if skipped:
+        message = (f"skipped {skipped} of {len(records)} records longer than the teacher reads; "
+                   f"raise RULING_MAX_INPUT_TOKENS to answer them")
+        if skipped == len(records):
+            raise ValueError(message)
+        log(message)
